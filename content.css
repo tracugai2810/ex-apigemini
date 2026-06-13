@@ -1,0 +1,331 @@
+/* Sapo Auto v8.0 */
+
+/* ===== TOAST ===== */
+.sapo-ao-toast {
+  position: fixed; top: 12px; right: 16px; z-index: 2147483647;
+  max-width: 320px; padding: 10px 16px; border-radius: 12px;
+  color: #fff; font: 600 13px/1.4 system-ui;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  animation: sa-in 0.2s ease-out;
+}
+.sapo-ao-toast.info { background: #1e40af; }
+.sapo-ao-toast.success { background: #166534; }
+.sapo-ao-toast.error { background: #991b1b; }
+@keyframes sa-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== ORDER BADGE (VERTICAL & OUTSIDE) ===== */
+.sapo-order-wrap { 
+  position: relative !important; 
+  overflow: visible !important; 
+}
+
+.sapo-order-badge-vertical {
+  position: absolute;
+  z-index: 2147483647; /* Đảm bảo nằm trên cùng mọi thứ */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+  user-select: none;
+}
+
+/* Nút tạo đơn Premium */
+.ocr-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; outline: none;
+  width: 38px; height: 32px;
+  border-radius: 9px;
+  color: #fff;
+  font: 700 14px/1 system-ui;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+  opacity: 0.95;
+}
+
+.ocr-btn:hover { 
+  opacity: 1; 
+  transform: scale(1.15) translateX(2px);
+  box-shadow: 0 5px 15px rgba(0,0,0,0.4);
+}
+
+.ocr-btn:active { transform: scale(0.9); }
+
+.btn-20k  { background: linear-gradient(135deg, #be185d, #9d174d) !important; }
+.btn-50k  { background: linear-gradient(135deg, #15803d, #166534) !important; }
+.btn-500k { background: linear-gradient(135deg, #1d4ed8, #1e40af) !important; }
+
+/* TRÁNH VỠ GIAO DIỆN: Chỉ can thiệp vào đúng bong bóng chat */
+.dialogue-message .content-text, 
+.dialogue-message .msg-content,
+.dialogue-message [class*="dialogue-line-content"],
+.dialogue-message .content { 
+  overflow: visible !important; 
+  clip-path: none !important;
+}
+
+/* Đảm bảo khung chat tổng thể cho phép hiển thị tràn */
+.dialogue-message, [class*="message-list"] {
+  overflow: visible !important;
+}
+
+/* ===== TEXT SCAN ACTIONS (STABLE LEGACY POISITION) ===== */
+.sa-text-actions {
+  position: relative;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  pointer-events: auto;
+  z-index: 2147483647;
+}
+
+.sa-text-label {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 10px; border-radius: 8px;
+  background: #000 !important;
+  color: #fcd34d !important; font: 700 12px/1 'Consolas', monospace;
+  cursor: pointer; white-space: nowrap;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+
+.sa-text-btn {
+  border: none; outline: none; padding: 4px 10px; border-radius: 8px;
+  color: #fff !important; font: 700 12px/1 system-ui;
+  cursor: pointer; transition: all 0.2s;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+  text-align: center;
+}
+.sa-text-btn:hover { transform: scale(1.1); filter: brightness(1.1); }
+.sa-text-btn.btn-img { background: #3b82f6; }
+.sa-text-btn.btn-txt { background: #10b981; }
+
+/* Nút con dùng pointer */
+.sapo-order-badge-vertical button,
+.sapo-order-badge-vertical input,
+.sa-group button,
+.sa-group input {
+  cursor: pointer !important;
+}
+
+/* ===== DATETIME PICKER (SAPO CHAT) ===== */
+.sa-dt-wrap {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+  border-radius: 5px !important;
+  padding: 2px 5px !important;
+  flex-shrink: 0 !important;
+}
+
+.sa-dt-icon {
+  font-size: 11px !important;
+  line-height: 1 !important;
+  flex-shrink: 0 !important;
+}
+
+.sa-dt-input {
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: #e2e8f0 !important;
+  font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-width: 130px !important;
+  width: auto !important;
+  height: auto !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+}
+.sa-dt-input::-webkit-calendar-picker-indicator {
+  cursor: pointer !important;
+  filter: invert(1) !important;
+  opacity: 0.6 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* ===== POPUP OVERLAY ===== */
+.sa-popup-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
+  z-index: 2147483647;
+  display: flex; align-items: center; justify-content: center;
+}
+.sa-popup-overlay.sa-silent {
+  width: 1px !important; height: 1px !important;
+  opacity: 0.01 !important;
+  pointer-events: none !important;
+  left: auto !important; top: auto !important;
+  right: 0 !important; bottom: 0 !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  overflow: hidden !important;
+}
+.sa-popup-box {
+  width: 480px;
+  height: 90vh;
+  min-height: 600px;
+  max-height: 850px;
+  background: #1a1a1a;
+  border-radius: 16px; position: relative;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  overflow: hidden; animation: pop-in 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.2);
+  border: 1px solid #333;
+}
+.sa-popup-iframe { width: 100%; height: 100%; border: none; }
+.sa-popup-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: rgba(255,255,255,0.1); color: #fff; border: none;
+  font-size: 20px; cursor: pointer; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+}
+.sa-popup-close:hover { background: rgba(255,255,255,0.2); }
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ===== NEW: MANUAL SERIAL INPUT FOR IMAGES ===== */
+.sa-serial-input-wrapper {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.sa-serial-input {
+  width: 38px;
+  height: 26px;
+  background: #1e293b;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  color: #fff;
+  font: 700 11px system-ui;
+  text-align: center;
+  outline: none;
+  transition: all 0.2s;
+}
+.sa-serial-input:focus {
+  width: 50px;
+  background: #0f172a;
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+}
+.sa-serial-input::placeholder { color: #64748b; font-weight: 400; }
+
+.sa-serial-group {
+  display: flex;
+  flex-direction: column; /* THÀNH HÀNG DỌC ĐỂ AN TOÀN TUYỆT ĐỐI */
+  align-items: center;
+  gap: 6px;
+  background: #0f172a;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  animation: pop-in 0.2s ease-out;
+  width: fit-content;
+}
+
+.sa-serial-val {
+  color: #fbbf24;
+  font: 800 11px 'Consolas', monospace;
+  margin-bottom: 2px;
+  cursor: copy;
+}
+
+.sa-mini-btn {
+  border: none; outline: none;
+  width: 40px; height: 26px; /* Kích thước đồng nhất với nút 20k 50k */
+  border-radius: 6px;
+  color: #fff;
+  font: 700 10px system-ui;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.1s;
+}
+.sa-mini-btn:hover { transform: scale(1.08); }
+.sa-mini-btn.btn-a { background: #2563eb; }
+.sa-mini-btn.btn-c { background: #059669; }
+.sa-mini-btn.btn-x { background: #475569; color: #f1f5f9; height: 20px; font-size: 11px; }
+
+/* ===== OCR SCAN BUTTON ===== */
+.sa-scan-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; outline: none;
+  width: 38px; height: 26px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9) !important;
+  color: #fff;
+  font: 700 13px system-ui;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4);
+  position: relative;
+}
+.sa-scan-btn:hover {
+  transform: scale(1.12);
+  box-shadow: 0 4px 15px rgba(124, 58, 237, 0.6);
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed) !important;
+}
+.sa-scan-btn:active { transform: scale(0.92); }
+.sa-scan-btn.scanning {
+  background: #0f172a !important;
+  color: #3b82f6 !important;
+  pointer-events: none;
+  animation: pulse 1s infinite;
+}
+
+/* ===== NEW: QUESTION INPUT ===== */
+.sa-question-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: #1e293b;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  color: #fff;
+  font: 400 12px system-ui;
+  outline: none;
+  transition: all 0.2s;
+}
+.sa-question-input:focus {
+  background: #0f172a;
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+}
+.sa-question-input::placeholder {
+  color: #64748b;
+  font-style: italic;
+}
+
+.sa-scan-btn.scanning::after {
+  content: '';
+  position: absolute;
+  width: 14px; height: 14px;
+  border: 2px solid transparent;
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: sa-spin 0.6s linear infinite;
+}
+@keyframes sa-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Auto-detected serial indicator */
+.sa-serial-val.auto-detected::before {
+  content: '🤖';
+  margin-right: 3px;
+  font-size: 10px;
+}
+

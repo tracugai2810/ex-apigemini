@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "Sapo Auto Order & AI Popup (tool-kinh-dich)",
+  "version": "1.1.0",
+  "description": "Sapo Auto Order (tạo đơn, quét OCR) với Gemini + Claude popup",
+  "permissions": [
+
+    "clipboardWrite",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "options.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.mysapo.net/*",
+        "*://*.sapoapps.vn/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "*://luc-hao-app-ten.vercel.app/*",
+        "*://dshc-luc-hao.vercel.app/*"
+      ],
+      "js": ["app_automator.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://business.facebook.com/*"],
+      "js": ["fb-content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["*://*.sapoapps.vn/*", "*://*.mysapo.net/*"]
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
