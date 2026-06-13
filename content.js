@@ -119,6 +119,25 @@ try {
           ].filter(k => k.length > 10);
           this.model = data.geminiModel || "gemini-3.1-flash-lite";
         } catch(e) { this.apiKeys = []; }
+
+        // Phục hồi trí nhớ API từ ổ cứng (LocalStorage) và Reset theo giờ Việt Nam
+        try {
+          const saved = JSON.parse(localStorage.getItem('sa_api_state') || "{}");
+          const vnTime = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (7 * 3600000));
+          const today = vnTime.toISOString().split('T')[0];
+          
+          if (saved.date === today) {
+            this.currentKeyIdx = saved.keyIdx || 0;
+            this.currentModelIdx = saved.modelIdx || 0;
+          } else {
+            this.currentKeyIdx = 0;
+            this.currentModelIdx = 0;
+            localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: 0, modelIdx: 0 }));
+          }
+        } catch(e) {
+          this.currentKeyIdx = 0;
+          this.currentModelIdx = 0;
+        }
       },
 
       isReady() { return this.apiKeys.length > 0; },
@@ -150,35 +169,60 @@ try {
         }
       },
 
-      async executeWithFallback(payload, actionName, timeoutMs = 20000) {
+      currentKeyIdx: 0,
+      currentModelIdx: 0,
+
+      async executeWithFallback(payload, actionName, timeoutMs = 60000) {
         if (!this.isReady()) throw new Error("Chưa cấu hình API Key");
         
         const modelsToTry = [this.model, ...this.FALLBACK_MODELS.filter(m => m !== this.model)];
         let lastError = null;
 
-        // Quét từng API Key
+        let startKey = this.currentKeyIdx || 0;
+        let startModel = this.currentModelIdx || 0;
+
+        // Quét từng API Key (xoay vòng bắt đầu từ key cuối cùng thành công)
         for (let i = 0; i < this.apiKeys.length; i++) {
-          const apiKey = this.apiKeys[i];
-          // Mỗi Key thử qua các model
-          for (const modelName of modelsToTry) {
+          const kIdx = (startKey + i) % this.apiKeys.length;
+          const apiKey = this.apiKeys[kIdx];
+          
+          for (let j = 0; j < modelsToTry.length; j++) {
+            if (i === 0 && j < startModel) continue; // Bỏ qua các model đã tịt ở lượt trước
+
+            const modelName = modelsToTry[j];
             try {
-              SapoAuto_v1.utils.log(`${actionName} trying Key ${i+1}, model: ${modelName}`);
+              SapoAuto_v1.utils.log(`${actionName} trying Key ${kIdx+1}, model: ${modelName}`);
               const json = await this._callModel(modelName, apiKey, payload, timeoutMs);
+              
+              // THÀNH CÔNG: Chốt hạ vị trí này để lần sau dùng tiếp luôn!
+              this.currentKeyIdx = kIdx;
+              this.currentModelIdx = j;
+              try {
+                const vnTime = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (7 * 3600000));
+                const today = vnTime.toISOString().split('T')[0];
+                localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: kIdx, modelIdx: j }));
+              } catch(e) {}
+              
               return json;
             } catch (err) {
               lastError = err;
               if (err.name === 'AbortError') {
-                 // Timeout -> Bỏ qua toàn bộ, lỗi mạng quá chậm
-                 throw new Error("Quá thời gian chờ (Timeout). Máy chủ phản hồi quá chậm.");
+                 throw new Error("Quá thời gian chờ (Timeout). Dữ liệu gửi đi quá lớn hoặc nghẽn mạng.");
               }
               if (err.quota) {
-                SapoAuto_v1.utils.log(`Quota exceeded for Key ${i+1}, ${modelName} → trying next...`);
+                SapoAuto_v1.utils.log(`Quota exceeded Key ${kIdx+1}, ${modelName} → Đổi tự động...`);
                 continue;
               }
-              throw err; // Lỗi khác (không phải quota)
+              throw err; 
             }
           }
+          startModel = 0; // Sang key mới thì test lại model từ đầu
         }
+        
+        // Cháy sạch API -> Reset về 0 chờ ngày mai
+        this.currentKeyIdx = 0;
+        this.currentModelIdx = 0;
+        try { localStorage.removeItem('sa_api_state'); } catch(e) {}
         throw new Error("Tất cả API Keys và Models đều hết quota hoặc lỗi.");
       },
 
@@ -218,7 +262,7 @@ try {
             parts: [ { text: promptText } ]
           }]
         };
-        const json = await this.executeWithFallback(payload, "TextGen", 20000); // 20s timeout total
+        const json = await this.executeWithFallback(payload, "TextGen", 60000); // Tăng lên 60s để AI đủ thời gian nhai file kiến thức lớn
         return (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
       }
     },
