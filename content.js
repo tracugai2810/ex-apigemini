@@ -192,6 +192,16 @@ try {
             const modelName = modelsToTry[j];
             try {
               SapoAuto_v1.utils.log(`${actionName} trying Key ${kIdx+1}, model: ${modelName}`);
+              let friendlyName = modelName;
+              if (modelName === 'gemini-3.5-flash') friendlyName = 'Gemini 3.5 Flash';
+              else if (modelName === 'gemini-3.1-flash-lite') friendlyName = 'Gemini 3.1 Flash Lite';
+              else if (modelName === 'gemini-2.5-flash-lite') friendlyName = 'Gemini 2.5 Flash Lite';
+              else if (modelName === 'gemini-3-flash') friendlyName = 'Gemini 3 Flash';
+              else if (modelName === 'gemini-2.5-flash') friendlyName = 'Gemini 2.5 Flash';
+              
+              let actText = actionName === "OCR" ? "Quét Seri" : "Gọi AI";
+              SapoAuto_v1.utils.toast(`⌛ Đang ${actText} (${friendlyName})...`, "info", 0);
+              
               const json = await this._callModel(modelName, apiKey, payload, timeoutMs);
               
               // THÀNH CÔNG: Chốt hạ vị trí này để lần sau dùng tiếp luôn!
@@ -274,7 +284,7 @@ try {
       wait: ms => new Promise(r => setTimeout(r, ms)),
       log: (...a) => console.log("[SA v1.0]", ...a),
       
-      toast(m, c) {
+      toast(m, c, duration = 3000) {
         const self = SapoAuto_v1;
         let t = document.getElementById("sa-toast");
         if (!t) {
@@ -286,7 +296,9 @@ try {
         t.className = "sapo-ao-toast " + (c || "info");
         t.style.display = "block";
         clearTimeout(self.STATE.toastTimer);
-        self.STATE.toastTimer = setTimeout(() => t.style.display = "none", 3000);
+        if (duration > 0) {
+          self.STATE.toastTimer = setTimeout(() => t.style.display = "none", duration);
+        }
       },
 
       setVal(el, v) {
