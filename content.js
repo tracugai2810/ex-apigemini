@@ -126,13 +126,13 @@ try {
           const vnTime = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (7 * 3600000));
           const today = vnTime.toISOString().split('T')[0];
           
-          if (saved.date === today) {
+          if (saved.date === today && saved.primaryModel === this.model) {
             this.currentKeyIdx = saved.keyIdx || 0;
             this.currentModelIdx = saved.modelIdx || 0;
           } else {
-            this.currentKeyIdx = 0;
+            this.currentKeyIdx = saved.keyIdx || 0;
             this.currentModelIdx = 0;
-            localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: 0, modelIdx: 0 }));
+            localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: this.currentKeyIdx, modelIdx: 0, primaryModel: this.model }));
           }
         } catch(e) {
           this.currentKeyIdx = 0;
@@ -200,7 +200,7 @@ try {
               try {
                 const vnTime = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (7 * 3600000));
                 const today = vnTime.toISOString().split('T')[0];
-                localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: kIdx, modelIdx: j }));
+                localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: kIdx, modelIdx: j, primaryModel: this.model }));
               } catch(e) {}
               
               return json;
@@ -227,6 +227,7 @@ try {
       },
 
       async scanSerial(imgSrc) {
+        await this.init();
         if (!this.isReady()) return null;
 
         const resp = await fetch(imgSrc);
@@ -256,6 +257,7 @@ try {
       },
 
       async generateText(promptText) {
+        await this.init();
         if (!this.isReady()) return null;
         const payload = {
           contents: [{
