@@ -486,6 +486,73 @@ try {
 
     // 6. HỆ THỐNG HIỂN THỊ (UI SYSTEM)
     ui: {
+      applySavedStateImage(btn, serial, originalText, originalOnClick) {
+        const imageData = localStorage.getItem("sa_img_" + serial);
+        if (!imageData) return;
+        
+        btn.textContent = "OK";
+        btn.disabled = false;
+        btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+        btn.style.color = "white";
+        btn.style.fontWeight = "bold";
+        btn.style.boxShadow = "0 0 15px rgba(34, 197, 94, 0.6)";
+        btn.style.pointerEvents = "auto";
+        
+        btn.onclick = async (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          try {
+            SapoAuto_v1.utils.toast("⌛ Đang copy vào Clipboard...", "info");
+            const blob = SapoAuto_v1.utils.dataURLtoBlob(imageData);
+            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+            SapoAuto_v1.utils.toast("✅ ĐÃ COPY! Bạn có thể Ctrl+V ngay.", "success");
+            btn.textContent = originalText;
+            btn.style.background = "";
+            btn.style.boxShadow = "";
+            btn.style.color = "";
+            btn.style.fontWeight = "";
+            btn.style.pointerEvents = "";
+            btn.disabled = false;
+            btn.onclick = originalOnClick;
+            try { localStorage.removeItem("sa_img_" + serial); } catch(e){}
+          } catch (err) { 
+            SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
+          }
+        };
+      },
+
+      applySavedState(btn, serial, originalText, originalOnClick) {
+        const savedStr = localStorage.getItem("sa_res_" + serial);
+        if (!savedStr) return;
+        try {
+          const saved = JSON.parse(savedStr);
+          btn.textContent = "Copy";
+          btn.disabled = false;
+          if (saved.type === 'claude') {
+             btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+          } else {
+             btn.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
+          }
+          btn.style.color = "white";
+          btn.onclick = async (e) => {
+             e.stopPropagation(); e.preventDefault();
+             try {
+               await navigator.clipboard.writeText(saved.content);
+               SapoAuto_v1.utils.toast("📋 Đã copy...", "success");
+               if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                 chrome.runtime.sendMessage({ action: saved.type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup' });
+               }
+               btn.textContent = originalText;
+               btn.style.background = "";
+               btn.style.color = "";
+               btn.onclick = originalOnClick;
+               localStorage.removeItem("sa_res_" + serial);
+             } catch (err) {
+               SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
+             }
+          };
+        } catch(e) {}
+      },
+
       isTarget(img) {
         const self = SapoAuto_v1;
         if (!img || img.tagName !== "IMG" || img.getAttribute("data-sapo-v1")) return false;
@@ -668,15 +735,23 @@ try {
 
           const btnA = document.createElement("button");
           btnA.className = "sa-mini-btn btn-a";
+          btnA.dataset.serial = val;
           btnA.textContent = "Ảnh";
           btnA.onclick = (e) => { stopAll(e); self.textScan.runImage(val, btnA, getPickerDate()); };
           btnA.onmousedown = stopAll; btnA.onmouseup = stopAll;
+          self.ui.applySavedStateImage(btnA, val, "Ảnh", btnA.onclick);
+          if (localStorage.getItem("sa_loading_img_" + val)) { btnA.textContent = "⌛..."; btnA.disabled = true; }
           actionGroup.appendChild(btnA);
 
           const questionInput = document.createElement("input");
           questionInput.type = "text";
           questionInput.className = "sa-question-input";
           questionInput.placeholder = "Nhập câu hỏi...";
+          const urlParams = new URLSearchParams(window.location.search);
+          const convId = urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
+          const storageKey = "sa_last_question_" + convId;
+          questionInput.value = localStorage.getItem(storageKey) || "";
+          questionInput.oninput = (e) => localStorage.setItem(storageKey, e.target.value);
           questionInput.onclick = stopAll;
           questionInput.onmousedown = stopAll;
           questionInput.onmouseup = stopAll;
@@ -685,9 +760,12 @@ try {
 
           const btnC = document.createElement("button");
           btnC.className = "sa-mini-btn btn-c";
+          btnC.dataset.serial = val;
           btnC.textContent = "Chữ";
-          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, getPickerDate(), questionInput.value.trim()); };
+          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim()); };
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
+          self.ui.applySavedState(btnC, val, "Chữ", btnC.onclick);
+          if (localStorage.getItem("sa_loading_txt_" + val)) { btnC.textContent = "⌛..."; btnC.disabled = true; }
           actionGroup.appendChild(btnC);
 
           const btnX = document.createElement("button");
@@ -773,22 +851,33 @@ try {
 
         const btnImg = document.createElement("button");
         btnImg.className = "sa-text-btn btn-img";
+        btnImg.dataset.serial = numOnly;
         btnImg.textContent = "Ảnh";
         btnImg.onclick = () => self.textScan.runImage(numOnly, btnImg, getPickerDate());
+        self.ui.applySavedStateImage(btnImg, numOnly, "Ảnh", btnImg.onclick);
+        if (localStorage.getItem("sa_loading_img_" + numOnly)) { btnImg.textContent = "⌛..."; btnImg.disabled = true; }
         badge.appendChild(btnImg);
 
         const questionInput = document.createElement("input");
         questionInput.type = "text";
         questionInput.className = "sa-question-input";
         questionInput.placeholder = "Nhập câu hỏi...";
+        const urlParams = new URLSearchParams(window.location.search);
+        const convId = urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
+        const storageKey = "sa_last_question_" + convId;
+        questionInput.value = localStorage.getItem(storageKey) || "";
+        questionInput.oninput = (e) => localStorage.setItem(storageKey, e.target.value);
         questionInput.onclick = (e) => e.stopPropagation();
         questionInput.onmousedown = (e) => e.stopPropagation();
         questionInput.onkeydown = (e) => e.stopPropagation();
 
         const btnTxt = document.createElement("button");
         btnTxt.className = "sa-text-btn btn-txt";
+        btnTxt.dataset.serial = numOnly;
         btnTxt.textContent = "Chữ";
-        btnTxt.onclick = () => self.textScan.runPopup(numOnly, getPickerDate(), questionInput.value.trim());
+        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim());
+        self.ui.applySavedState(btnTxt, numOnly, "Chữ", btnTxt.onclick);
+        if (localStorage.getItem("sa_loading_txt_" + numOnly)) { btnTxt.textContent = "⌛..."; btnTxt.disabled = true; }
         badge.appendChild(btnTxt);
 
         container.appendChild(badge);
@@ -883,6 +972,7 @@ try {
         self.utils.toast("⌛ Đang mở cửa sổ lập quẻ...", "info");
         btn.textContent = "⌛...";
         btn.disabled = true;
+        localStorage.setItem("sa_loading_img_" + serial, "1");
 
         const url = self.textScan.buildUrl(serial, date, "image");
         
@@ -919,8 +1009,13 @@ try {
 
             // Xóa overlay ngay — không cần giữ iframe tàng hình nữa
             overlay.remove();
+            
+            localStorage.removeItem("sa_loading_img_" + serial);
+            let currentBtn = document.querySelector(`.btn-a[data-serial="${serial}"], .btn-img[data-serial="${serial}"]`);
+            if (currentBtn) btn = currentBtn;
 
             const imageData = e.data.payload;
+            try { localStorage.setItem("sa_img_" + serial, imageData); } catch(e) { console.warn("Lỗi lưu ảnh nháp", e); }
             const originalOnclick = btn.onclick;
             btn.textContent = "OK";
             btn.disabled = false;
@@ -948,6 +1043,7 @@ try {
                 btn.style.pointerEvents = "";
                 btn.disabled = false;
                 btn.onclick = originalOnclick;
+                try { localStorage.removeItem("sa_img_" + serial); } catch(e){}
               } catch (err) { 
                 self.utils.toast("❌ Lỗi copy: " + err.message, "error");
               }
@@ -960,12 +1056,21 @@ try {
         setTimeout(() => {
           if (!finished && document.body.contains(overlay)) {
             self.utils.toast("❌ Quá thời gian. Kiểm tra cửa sổ popup xem có lỗi gì không.", "error");
+            localStorage.removeItem("sa_loading_img_" + serial);
+            let currentBtn = document.querySelector(`.btn-a[data-serial="${serial}"], .btn-img[data-serial="${serial}"]`);
+            if (currentBtn) { currentBtn.textContent = "Ảnh"; currentBtn.disabled = false; }
           }
         }, 60000); // Tăng lên 60s để người dùng kịp nhìn lỗi
       },
 
-      async runPopup(serial, date, question = "") {
+      async runPopup(serial, btn, date, question = "") {
         const self = SapoAuto_v1;
+        const originalText = btn ? btn.textContent : "Chữ";
+        if (btn) {
+          btn.textContent = "⌛...";
+          btn.disabled = true;
+        }
+        localStorage.setItem("sa_loading_txt_" + serial, "1");
         self.utils.toast("⌛ Đang tải dữ liệu quẻ...", "info");
         
         try {
@@ -993,6 +1098,7 @@ try {
           let copyText = result.copyText;
           
           // --- AI 1-CLICK FLOW ---
+          let needRestore = true;
           try {
             self.utils.toast("⌛ Đang tải Kiến thức & Gọi AI (tối đa 20s)...", "info");
             
@@ -1008,11 +1114,39 @@ try {
             }
 
             const aiResult = await self.aiService.generateText(prompt);
+            
+            localStorage.removeItem("sa_loading_txt_" + serial);
+            let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+            if (currentBtn) btn = currentBtn;
+
             if (aiResult && aiResult.length > 10) {
-              await navigator.clipboard.writeText(aiResult);
-              self.utils.toast("✅ ĐÃ LUẬN XONG! Đang mở Claude...", "success");
-              if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                chrome.runtime.sendMessage({ action: 'openClaudeDirectPopup' });
+              if (btn) {
+                localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'claude', content: aiResult }));
+                needRestore = false;
+                const originalOnClick = btn.onclick;
+                btn.textContent = "Copy";
+                btn.disabled = false;
+                btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+                btn.style.color = "white";
+                self.utils.toast("✅ ĐÃ LUẬN XONG! Bấm Copy để mở Claude.", "success", 5000);
+                
+                btn.onclick = async (e) => {
+                  e.stopPropagation(); e.preventDefault();
+                  try {
+                    await navigator.clipboard.writeText(aiResult);
+                    self.utils.toast("📋 Đã copy và mở Claude...", "success");
+                    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                      chrome.runtime.sendMessage({ action: 'openClaudeDirectPopup' });
+                    }
+                    btn.textContent = originalText;
+                    btn.style.background = "";
+                    btn.style.color = "";
+                    btn.onclick = originalOnClick;
+                    localStorage.removeItem("sa_res_" + serial);
+                  } catch (err) {
+                    self.utils.toast("❌ Lỗi copy: " + err.message, "error");
+                  }
+                };
               }
               return; // Dừng luồng tại đây (thành công)
             } else {
@@ -1024,15 +1158,52 @@ try {
           }
 
           // --- FALLBACK TO LEGACY FLOW ---
-          await navigator.clipboard.writeText(copyText);
-          self.utils.toast("✅ ĐÃ COPY QUẺ! Đang mở Gemini...", "success");
+          localStorage.removeItem("sa_loading_txt_" + serial);
+          let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+          if (currentBtn) btn = currentBtn;
 
-          if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({ action: 'openGeminiPopup' });
+          if (btn) {
+            localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'gemini', content: copyText }));
+            needRestore = false;
+            const originalOnClick = btn.onclick;
+            btn.textContent = "Copy";
+            btn.disabled = false;
+            btn.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
+            btn.style.color = "white";
+            self.utils.toast("✅ ĐÃ LẤY QUẺ! Bấm Copy để mở Gemini.", "success", 5000);
+            
+            btn.onclick = async (e) => {
+              e.stopPropagation(); e.preventDefault();
+              try {
+                await navigator.clipboard.writeText(copyText);
+                self.utils.toast("📋 Đã copy và mở Gemini...", "success");
+                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                  chrome.runtime.sendMessage({ action: 'openGeminiPopup' });
+                }
+                btn.textContent = originalText;
+                btn.style.background = "";
+                btn.style.color = "";
+                btn.onclick = originalOnClick;
+                localStorage.removeItem("sa_res_" + serial);
+              } catch (err) {
+                self.utils.toast("❌ Lỗi copy: " + err.message, "error");
+              }
+            };
           }
         } catch (err) {
           self.utils.toast("❌ Lỗi lập quẻ: " + err.message, "error");
           console.error("[SapoAuto] API Error:", err);
+        } finally {
+          localStorage.removeItem("sa_loading_txt_" + serial);
+          let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+          if (currentBtn) btn = currentBtn;
+          
+          if (btn && needRestore) {
+            btn.textContent = "Chữ";
+            btn.disabled = false;
+          } else if (btn) {
+            btn.disabled = false;
+          }
         }
       }
     },
