@@ -905,9 +905,9 @@ try {
 
       scan() {
         const self = SapoAuto_v1;
-        document.querySelectorAll(".content-text, .msg-content, .message-text, .dialogue-text-content").forEach(div => {
-          // CHỐNG LẶP cho các trường hợp element con/cha bị lồng nhau
-          if (div.querySelector(".sa-group") || div.dataset.saV19 || div.closest("[data-sa-v19]")) return;
+        document.querySelectorAll(".content-text:not([data-sa-v19]), .msg-content:not([data-sa-v19]), .message-text:not([data-sa-v19]), .dialogue-text-content:not([data-sa-v19])").forEach(div => {
+          // CHỐNG LẶP cho các trường hợp element con/cha bị lồng nhau (kiểm tra dataset O(1) trước)
+          if (div.dataset.saV19 || div.closest("[data-sa-v19]") || div.querySelector(".sa-group")) return;
 
           const txt = (div.innerText || "").trim();
           const matches = txt.match(/[a-zA-Z0-9]{0,5}\s?\d{6,12}/gi);
@@ -1245,8 +1245,8 @@ try {
       }
       
       const scanAll = () => {
-        // 1. Quét Ảnh mới
-        document.querySelectorAll("img").forEach(img => {
+        // 1. Quét Ảnh mới (chỉ quét các ảnh chưa xử lý)
+        document.querySelectorAll("img:not([data-sapo-v1])").forEach(img => {
           if (self.ui.isTarget(img)) self.ui.inject(img);
         });
         // 2. Quét Text mới
@@ -1350,7 +1350,7 @@ try {
         if (scanDebounceTimer) clearTimeout(scanDebounceTimer);
         scanDebounceTimer = setTimeout(() => {
           scanDebounceTimer = null;
-          scanAll();
+          requestAnimationFrame(() => scanAll());
         }, 300);
       };
       // document_start: body có thể chưa tồn tại → chờ DOM ready

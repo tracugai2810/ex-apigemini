@@ -27,8 +27,15 @@
         // THEO DÕI KẾT QUẢ & CUỘN TRUNG ĐÍCH
         // Web đã tự động điền form và ấn submit dựa trên URL param sau 300ms
         let resultsFound = false;
+        let attempts = 0;
         
         const monitorResult = setInterval(() => {
+          attempts++;
+          if (attempts > 150) { // Timeout after ~3 minutes
+             clearInterval(monitorResult);
+             log("Đã hết thời gian chờ kết quả.");
+             return;
+          }
           const resultImg = document.querySelector('#imageDisplay img, #canvasContainer canvas, canvas');
           const resultSection = document.querySelector('#resultSection');
           const resultCard = document.querySelector('#result-display, .card.result-card');
