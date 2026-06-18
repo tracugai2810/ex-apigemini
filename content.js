@@ -315,6 +315,10 @@ try {
         let n = bstr.length, u8arr = new Uint8Array(n);
         while(n--) u8arr[n] = bstr.charCodeAt(n);
         return new Blob([u8arr], {type:mime});
+      },
+      getActiveConversationId() {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
       }
     },
 
@@ -539,7 +543,10 @@ try {
                await navigator.clipboard.writeText(saved.content);
                SapoAuto_v1.utils.toast("📋 Đã copy...", "success");
                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                 chrome.runtime.sendMessage({ action: saved.type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup' });
+                 chrome.runtime.sendMessage({ 
+                   action: saved.type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup',
+                   conversationId: SapoAuto_v1.utils.getActiveConversationId()
+                 });
                }
                btn.textContent = originalText;
                btn.style.background = "";
@@ -761,12 +768,20 @@ try {
           const btnC = document.createElement("button");
           btnC.className = "sa-mini-btn btn-c";
           btnC.dataset.serial = val;
-          btnC.textContent = "Chữ";
+          btnC.textContent = "Luận";
           btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim()); };
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
-          self.ui.applySavedState(btnC, val, "Chữ", btnC.onclick);
+          self.ui.applySavedState(btnC, val, "Luận", btnC.onclick);
           if (localStorage.getItem("sa_loading_txt_" + val)) { btnC.textContent = "⌛..."; btnC.disabled = true; }
           actionGroup.appendChild(btnC);
+
+          const btnTxtOnly = document.createElement("button");
+          btnTxtOnly.className = "sa-mini-btn btn-c-only";
+          btnTxtOnly.dataset.serial = val;
+          btnTxtOnly.textContent = "Chữ";
+          btnTxtOnly.onclick = (e) => { stopAll(e); self.textScan.runPopupTextOnly(val, btnTxtOnly, getPickerDate()); };
+          btnTxtOnly.onmousedown = stopAll; btnTxtOnly.onmouseup = stopAll;
+          actionGroup.appendChild(btnTxtOnly);
 
           const btnX = document.createElement("button");
           btnX.className = "sa-mini-btn btn-x";
@@ -874,11 +889,20 @@ try {
         const btnTxt = document.createElement("button");
         btnTxt.className = "sa-text-btn btn-txt";
         btnTxt.dataset.serial = numOnly;
-        btnTxt.textContent = "Chữ";
+        btnTxt.textContent = "Luận";
         btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim());
-        self.ui.applySavedState(btnTxt, numOnly, "Chữ", btnTxt.onclick);
+        self.ui.applySavedState(btnTxt, numOnly, "Luận", btnTxt.onclick);
         if (localStorage.getItem("sa_loading_txt_" + numOnly)) { btnTxt.textContent = "⌛..."; btnTxt.disabled = true; }
         badge.appendChild(btnTxt);
+
+        const btnTxtOnly = document.createElement("button");
+        btnTxtOnly.className = "sa-text-btn btn-txt-only";
+        btnTxtOnly.dataset.serial = numOnly;
+        btnTxtOnly.textContent = "Chữ";
+        btnTxtOnly.onclick = () => self.textScan.runPopupTextOnly(numOnly, btnTxtOnly, getPickerDate());
+        btnTxtOnly.onmousedown = (e) => e.stopPropagation();
+        btnTxtOnly.onmouseup = (e) => e.stopPropagation();
+        badge.appendChild(btnTxtOnly);
 
         container.appendChild(badge);
         container.appendChild(questionInput);
@@ -1136,7 +1160,7 @@ try {
                     await navigator.clipboard.writeText(aiResult);
                     self.utils.toast("📋 Đã copy và mở Claude...", "success");
                     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                      chrome.runtime.sendMessage({ action: 'openClaudeDirectPopup' });
+                      chrome.runtime.sendMessage({ action: 'openClaudeDirectPopup', conversationId: self.utils.getActiveConversationId() });
                     }
                     btn.textContent = originalText;
                     btn.style.background = "";
@@ -1178,7 +1202,7 @@ try {
                 await navigator.clipboard.writeText(copyText);
                 self.utils.toast("📋 Đã copy và mở Gemini...", "success");
                 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                  chrome.runtime.sendMessage({ action: 'openGeminiPopup' });
+                  chrome.runtime.sendMessage({ action: 'openGeminiPopup', conversationId: self.utils.getActiveConversationId() });
                 }
                 btn.textContent = originalText;
                 btn.style.background = "";
@@ -1199,9 +1223,62 @@ try {
           if (currentBtn) btn = currentBtn;
           
           if (btn && needRestore) {
-            btn.textContent = "Chữ";
+            btn.textContent = originalText;
             btn.disabled = false;
           } else if (btn) {
+            btn.disabled = false;
+          }
+        }
+      },
+
+      async runPopupTextOnly(serial, btn, date) {
+        const self = SapoAuto_v1;
+        const originalText = btn ? btn.textContent : "Chữ";
+        if (btn) {
+          btn.textContent = "⌛...";
+          btn.disabled = true;
+        }
+        self.utils.toast("⌛ Đang tải dữ liệu quẻ...", "info");
+        
+        try {
+          const base = self.CONFIG.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
+          const baseUrl = base.endsWith('/') ? base : base + '/';
+          let apiUrl = `${baseUrl}api/lap-que?serial=${serial}`;
+          if (date) {
+            const p = n => String(n).padStart(2, "0");
+            const saDate = `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}`;
+            const saHour = date.getHours();
+            const saMin = date.getMinutes();
+            apiUrl += `&sa_date=${saDate}&sa_hour=${saHour}&sa_minute=${saMin}`;
+          }
+
+          const response = await fetch(apiUrl);
+          if (!response.ok) {
+            throw new Error(`API error: ${response.status}`);
+          }
+
+          const result = await response.json();
+          if (!result.success) {
+            throw new Error(result.error || "Không thể lập quẻ.");
+          }
+
+          let copyText = result.copyText;
+          
+          await navigator.clipboard.writeText(copyText);
+          self.utils.toast("📋 Đã copy và đang mở Gemini...", "success");
+
+          if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({
+              action: 'openGeminiPopup',
+              conversationId: self.utils.getActiveConversationId()
+            });
+          }
+        } catch (err) {
+          self.utils.toast("❌ Lỗi lập quẻ: " + err.message, "error");
+          console.error("[SapoAuto] API Error:", err);
+        } finally {
+          if (btn) {
+            btn.textContent = originalText;
             btn.disabled = false;
           }
         }

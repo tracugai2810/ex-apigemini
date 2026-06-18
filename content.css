@@ -103,6 +103,7 @@
 .sa-text-btn:hover { transform: scale(1.1); filter: brightness(1.1); }
 .sa-text-btn.btn-img { background: #3b82f6; }
 .sa-text-btn.btn-txt { background: #10b981; }
+.sa-text-btn.btn-txt-only { background: #10b981; }
 
 /* Nút con dùng pointer */
 .sapo-order-badge-vertical button,
@@ -257,6 +258,7 @@
 .sa-mini-btn:hover { transform: scale(1.08); }
 .sa-mini-btn.btn-a { background: #2563eb; }
 .sa-mini-btn.btn-c { background: #059669; }
+.sa-mini-btn.btn-c-only { background: #059669; }
 .sa-mini-btn.btn-x { background: #475569; color: #f1f5f9; height: 20px; font-size: 11px; }
 
 /* ===== OCR SCAN BUTTON ===== */

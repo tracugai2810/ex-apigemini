@@ -205,6 +205,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const sapoUrl = sender.tab ? sender.tab.url : null;
     const sapoTabId = sender.tab ? sender.tab.id : null;
     const sapoWindowId = sender.tab ? sender.tab.windowId : null;
+    const conversationId = msg.conversationId || 'default';
 
     if (!sapoUrl) return;
 
@@ -212,7 +213,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.storage.sync.get(DEFAULTS, (settings) => {
       chrome.storage.session.get('geminiSessions', (data) => {
         let sessions = data.geminiSessions || {};
-        let existingSession = sessions[sapoUrl];
+        let existingSession = sessions[conversationId];
         
         let options = {
           url: settings.geminiUrl,
@@ -230,7 +231,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     console.error('[SapoFBExt v19] Lỗi mở Gemini:', chrome.runtime.lastError);
                     return;
                   }
-                  sessions[sapoUrl] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
+                  sessions[conversationId] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
                   chrome.storage.session.set({ geminiSessions: sessions });
                 });
               } else {
@@ -243,7 +244,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 console.error('[SapoFBExt v19] Lỗi mở Gemini:', chrome.runtime.lastError);
                 return;
               }
-              sessions[sapoUrl] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
+              sessions[conversationId] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
               chrome.storage.session.set({ geminiSessions: sessions });
             });
           }
@@ -269,13 +270,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const sapoUrl = sender.tab ? sender.tab.url : null;
     const sapoTabId = sender.tab ? sender.tab.id : null;
     const sapoWindowId = sender.tab ? sender.tab.windowId : null;
+    const conversationId = msg.conversationId || 'default';
 
     if (!sapoUrl) return;
 
     chrome.storage.sync.get(DEFAULTS, (settings) => {
       chrome.storage.session.get('claudeSessions', (data) => {
         let sessions = data.claudeSessions || {};
-        let existingSession = sessions[sapoUrl];
+        let existingSession = sessions[conversationId];
         
         let options = {
           url: settings.claudeUrl,
@@ -290,7 +292,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               if (chrome.runtime.lastError || !win) {
                 chrome.windows.create(options, (newWin) => {
                   if (chrome.runtime.lastError || !newWin) return;
-                  sessions[sapoUrl] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
+                  sessions[conversationId] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
                   chrome.storage.session.set({ claudeSessions: sessions });
                 });
               } else {
@@ -300,7 +302,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           } else {
             chrome.windows.create(options, (newWin) => {
               if (chrome.runtime.lastError || !newWin) return;
-              sessions[sapoUrl] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
+              sessions[conversationId] = { windowId: newWin.id, tabId: sapoTabId, sapoWindowId: sapoWindowId, url: sapoUrl };
               chrome.storage.session.set({ claudeSessions: sessions });
             });
           }
@@ -371,26 +373,26 @@ chrome.windows.onRemoved.addListener(async function(windowId) {
   const sessionData = await chrome.storage.session.get(['geminiSessions']);
   let sessions = sessionData.geminiSessions || {};
   let context = null;
-  let closedSapoUrl = null;
+  let closedKey = null;
 
-  for (let url in sessions) {
-      if (sessions[url].windowId === windowId) {
-          closedSapoUrl = url;
-          context = sessions[url];
+  for (let key in sessions) {
+      if (sessions[key].windowId === windowId) {
+          closedKey = key;
+          context = sessions[key];
           break;
       }
   }
 
   if (context) {
-    console.log('[SapoFBExt v19] Gemini Popup closed for:', closedSapoUrl);
-    delete sessions[closedSapoUrl];
+    console.log('[SapoFBExt v19] Gemini Popup closed for:', closedKey);
+    delete sessions[closedKey];
     await chrome.storage.session.set({ geminiSessions: sessions });
     
     // Đọc settings để lấy Claude URL + size, rồi mở popup Claude
     chrome.storage.sync.get(DEFAULTS, (settings) => {
       chrome.storage.session.get('claudeSessions', (data) => {
       let claudeSessions = data.claudeSessions || {};
-      let existingClaude = claudeSessions[closedSapoUrl];
+      let existingClaude = claudeSessions[closedKey];
 
       const createNewClaudePopup = () => {
         let options = {
@@ -416,11 +418,11 @@ chrome.windows.onRemoved.addListener(async function(windowId) {
               }
               return;
             }
-            claudeSessions[closedSapoUrl] = {
+            claudeSessions[closedKey] = {
                windowId: newWin.id, 
                tabId: context.tabId, 
                sapoWindowId: context.sapoWindowId, 
-               url: closedSapoUrl 
+               url: context.url 
             };
             chrome.storage.session.set({ claudeSessions: claudeSessions });
           });
@@ -450,19 +452,19 @@ chrome.windows.onRemoved.addListener(async function(windowId) {
   const claudeData = await chrome.storage.session.get(['claudeSessions']);
   let claudeSessions = claudeData.claudeSessions || {};
   let claudeContext = null;
-  let closedClaudeSapoUrl = null;
+  let closedClaudeKey = null;
 
-  for (let url in claudeSessions) {
-      if (claudeSessions[url].windowId === windowId) {
-          closedClaudeSapoUrl = url;
-          claudeContext = claudeSessions[url];
+  for (let key in claudeSessions) {
+      if (claudeSessions[key].windowId === windowId) {
+          closedClaudeKey = key;
+          claudeContext = claudeSessions[key];
           break;
       }
   }
 
   if (claudeContext) {
-    console.log('[SapoFBExt v19] Claude Popup closed for:', closedClaudeSapoUrl);
-    delete claudeSessions[closedClaudeSapoUrl];
+    console.log('[SapoFBExt v19] Claude Popup closed for:', closedClaudeKey);
+    delete claudeSessions[closedClaudeKey];
     await chrome.storage.session.set({ claudeSessions: claudeSessions });
     
     if (claudeContext.tabId) {
