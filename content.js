@@ -380,7 +380,7 @@ try {
 
         try {
           // === BƯỚC 1: TẠO CHECKOUT TRỐNG ===
-          self.utils.toast("⏳ (1/2) Tạo giỏ hàng...", "info");
+          self.utils.toast("⏳ (1/3) Tạo giỏ hàng...", "info");
           const res1 = await fetch(
             "https://sapo-socials.sapoapps.vn/api/checkouts?is_create_new=false&language=vi",
             {
@@ -422,7 +422,7 @@ try {
           await self.utils.wait(300);
 
           // === BƯỚC 2: CHỐT ĐƠN VỚI SẢN PHẨM ===
-          self.utils.toast("⏳ (2/2) Chốt đơn...", "info");
+          self.utils.toast("⏳ (2/3) Chốt đơn + Thanh toán...", "info");
           const completeUrl = `https://sapo-socials.sapoapps.vn/api/checkouts/${checkoutToken}/complete?conversation_id=${conversationId}&page_id=${currentPageId}&language=vi`;
 
           const res2 = await fetch(completeUrl, {
@@ -457,6 +457,12 @@ try {
                 shipping_lines: [],
                 tax_exempt: null,
                 user_id: "",
+                payment_details: {
+                  payment_method_id: 6708489,
+                  gateway: "Tiền mặt",
+                  amount: amount,
+                  reference: ""
+                },
                 line_items: [{
                   variant_id: productInfo.variantId,
                   custom: false,
@@ -478,7 +484,39 @@ try {
             throw new Error("Lỗi bước 2: " + errDetail);
           }
 
-          self.utils.toast("✅ Đã chốt đơn " + self.CONFIG.LABELS[amount] + "k!", "success");
+          // === BƯỚC 3: XÁC NHẬN GIAO HÀNG ===
+          const orderId = data2?.order?.id;
+          if (orderId) {
+            try {
+              self.utils.toast("⏳ (3/3) Xác nhận giao hàng...", "info");
+              await self.utils.wait(300);
+
+              const res3 = await fetch(
+                `https://sapo-socials.sapoapps.vn/api/order/fulfillments/${orderId}?language=vi`,
+                {
+                  method: "POST",
+                  headers: headers,
+                  body: JSON.stringify({
+                    delivery_method: "pick_up",
+                    delivery_status: "delivered"
+                  })
+                }
+              );
+
+              if (!res3.ok) {
+                const data3 = await res3.json().catch(() => ({}));
+                console.warn("[SA] Fulfillment warning:", data3);
+                self.utils.toast("⚠️ Đã tạo đơn + thanh toán, nhưng giao hàng tự động thất bại.", "info", 4000);
+              } else {
+                self.utils.toast("✅ Đã chốt đơn " + self.CONFIG.LABELS[amount] + "k + Thanh toán + Giao hàng!", "success");
+              }
+            } catch (e3) {
+              console.warn("[SA] Fulfillment error:", e3);
+              self.utils.toast("⚠️ Đã tạo đơn + thanh toán OK. Giao hàng tự động lỗi.", "info", 4000);
+            }
+          } else {
+            self.utils.toast("✅ Đã chốt đơn " + self.CONFIG.LABELS[amount] + "k + Thanh toán!", "success");
+          }
         } catch (e) {
           self.utils.toast("❌ " + e.message, "error");
           console.error("[SA] Order API error:", e);
