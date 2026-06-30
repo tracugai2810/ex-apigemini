@@ -103,6 +103,55 @@ try {
       model: "gemini-3.1-flash-lite",
       FALLBACK_MODELS: ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash"],
 
+      // === CONVERSATION HISTORY: Lưu tóm tắt quẻ đã luận để AI nhớ ngữ cảnh ===
+      conversationHistory: {
+        STORAGE_PREFIX: 'sa_conv_hist_',
+        MAX_SUMMARIES: 3, // Giữ tối đa 3 quẻ gần nhất
+
+        _key(convId) {
+          return this.STORAGE_PREFIX + (convId || 'default');
+        },
+
+        get(convId) {
+          try {
+            const data = localStorage.getItem(this._key(convId));
+            return data ? JSON.parse(data) : [];
+          } catch(e) { return []; }
+        },
+
+        save(convId, summaries) {
+          try {
+            localStorage.setItem(this._key(convId), JSON.stringify(summaries));
+          } catch(e) {}
+        },
+
+        add(convId, summary) {
+          const summaries = this.get(convId);
+          summaries.push({ text: summary, time: new Date().toLocaleString('vi-VN') });
+          // Xóa quẻ cũ nhất nếu vượt giới hạn
+          while (summaries.length > this.MAX_SUMMARIES) {
+            summaries.shift();
+          }
+          this.save(convId, summaries);
+        },
+
+        clear(convId) {
+          try { localStorage.removeItem(this._key(convId)); } catch(e) {}
+        },
+
+        buildContext(convId) {
+          const summaries = this.get(convId);
+          if (summaries.length === 0) return '';
+          let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
+          summaries.forEach((s, i) => {
+            const entry = typeof s === 'string' ? s : s.text;
+            const time = (s && s.time) ? ` (${s.time})` : '';
+            ctx += `\nQuẻ trước #${i + 1}${time}: ${entry}\n`;
+          });
+          return ctx;
+        }
+      },
+
       async init() {
         try {
           const data = await new Promise(r => {
@@ -276,6 +325,43 @@ try {
         };
         const json = await this.executeWithFallback(payload, "TextGen", 60000); // Tăng lên 60s để AI đủ thời gian nhai file kiến thức lớn
         return (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+      },
+
+      // === LUẬN QUẺ CÓ NGỮ CẢNH: Gửi kèm tóm tắt các quẻ trước để AI nhất quán ===
+      async generateTextWithHistory(promptText, conversationId) {
+        await this.init();
+        if (!this.isReady()) return null;
+
+        // Lấy ngữ cảnh các quẻ đã luận trước đó cho khách này
+        const historyContext = this.conversationHistory.buildContext(conversationId);
+
+        // Yêu cầu AI tóm tắt cuối bài để lưu cho lần sau (nhấn mạnh KHÔNG rút ngắn bài luận)
+        const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
+
+        const fullPrompt = promptText + historyContext + summaryInstruction;
+
+        const payload = {
+          contents: [{
+            parts: [{ text: fullPrompt }]
+          }]
+        };
+        const json = await this.executeWithFallback(payload, "TextGen", 60000);
+        let result = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+
+        // Tách phần tóm tắt ra khỏi kết quả để lưu ngầm
+        const summaryMatch = result.match(/\[TÓM[_ ]TẮT\]\s*:?\s*([\s\S]+)$/i);
+        if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
+          const summary = summaryMatch[1].trim();
+          // Lưu tóm tắt vào lịch sử (tự động xóa quẻ cũ nhất nếu quá 3)
+          this.conversationHistory.add(conversationId, summary);
+          // Xóa phần tóm tắt khỏi kết quả trả về cho user (user không thấy phần này)
+          result = result.replace(/\n*[-—~*_]*\s*\n*\[TÓM[_ ]TẮT\]\s*:?[\s\S]*$/i, '').trim();
+          console.log('[SA] Đã lưu tóm tắt quẻ cho conversation:', conversationId);
+        } else {
+          console.log('[SA] AI không trả về phần tóm tắt, bỏ qua lưu history');
+        }
+
+        return result;
       }
     },
 
@@ -813,6 +899,22 @@ try {
           if (localStorage.getItem("sa_loading_txt_" + val)) { btnC.textContent = "⌛..."; btnC.disabled = true; }
           actionGroup.appendChild(btnC);
 
+          const btnResetHist = document.createElement("button");
+          btnResetHist.className = "sa-mini-btn btn-reset-hist";
+          btnResetHist.textContent = "🔄";
+          btnResetHist.title = "Xóa ngữ cảnh các quẻ trước (reset lịch sử)";
+          btnResetHist.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
+          btnResetHist.onclick = (e) => {
+            stopAll(e);
+            const cId = self.utils.getActiveConversationId();
+            self.aiService.conversationHistory.clear(cId);
+            self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
+            btnResetHist.style.opacity = "0.3";
+            setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
+          };
+          btnResetHist.onmousedown = stopAll; btnResetHist.onmouseup = stopAll;
+          actionGroup.appendChild(btnResetHist);
+
           const btnTxtOnly = document.createElement("button");
           btnTxtOnly.className = "sa-mini-btn btn-c-only";
           btnTxtOnly.dataset.serial = val;
@@ -932,6 +1034,22 @@ try {
         self.ui.applySavedState(btnTxt, numOnly, "Luận", btnTxt.onclick);
         if (localStorage.getItem("sa_loading_txt_" + numOnly)) { btnTxt.textContent = "⌛..."; btnTxt.disabled = true; }
         badge.appendChild(btnTxt);
+
+        const btnResetHist = document.createElement("button");
+        btnResetHist.className = "sa-text-btn btn-reset-hist";
+        btnResetHist.textContent = "🔄";
+        btnResetHist.title = "Xóa ngữ cảnh các quẻ trước (reset lịch sử)";
+        btnResetHist.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
+        btnResetHist.onclick = () => {
+          const cId = self.utils.getActiveConversationId();
+          self.aiService.conversationHistory.clear(cId);
+          self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
+          btnResetHist.style.opacity = "0.3";
+          setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
+        };
+        btnResetHist.onmousedown = (e) => e.stopPropagation();
+        btnResetHist.onmouseup = (e) => e.stopPropagation();
+        badge.appendChild(btnResetHist);
 
         const btnTxtOnly = document.createElement("button");
         btnTxtOnly.className = "sa-text-btn btn-txt-only";
@@ -1175,7 +1293,8 @@ try {
                prompt += `\n\n---\nKiến thức tham khảo:\n${mdContent}`;
             }
 
-            const aiResult = await self.aiService.generateText(prompt);
+            const convId = self.utils.getActiveConversationId();
+            const aiResult = await self.aiService.generateTextWithHistory(prompt, convId);
             
             localStorage.removeItem("sa_loading_txt_" + serial);
             let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
