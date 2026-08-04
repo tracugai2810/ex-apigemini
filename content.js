@@ -104,43 +104,163 @@ try {
       FALLBACK_MODELS: ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash"],
 
       // === CONVERSATION HISTORY: Lưu tóm tắt quẻ đã luận để AI nhớ ngữ cảnh ===
+      // Dùng chrome.storage.sync để đồng bộ ngữ cảnh giữa các máy tính (cùng tài khoản Google)
       conversationHistory: {
         STORAGE_PREFIX: 'sa_conv_hist_',
         MAX_SUMMARIES: 3, // Giữ tối đa 3 quẻ gần nhất
+        _cache: new Map(), // In-memory cache để tránh delay khi đọc sync storage
 
         _key(convId) {
           return this.STORAGE_PREFIX + (convId || 'default');
         },
 
-        get(convId) {
+        // Migrate dữ liệu cũ từ localStorage sang chrome.storage.sync (chạy 1 lần)
+        async _migrateFromLocalStorage(convId) {
           try {
-            const data = localStorage.getItem(this._key(convId));
-            return data ? JSON.parse(data) : [];
+            const key = this._key(convId);
+            const localData = localStorage.getItem(key);
+            if (localData) {
+              const parsed = JSON.parse(localData);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                // Lưu lên sync storage
+                await new Promise((resolve) => {
+                  chrome.storage.sync.set({ [key]: parsed }, resolve);
+                });
+                // Xóa khỏi localStorage sau khi migrate thành công
+                localStorage.removeItem(key);
+                this._cache.set(key, parsed);
+                console.log('[SA] Đã migrate ngữ cảnh từ localStorage sang sync:', key);
+                return parsed;
+              }
+              // Dọn dẹp data rỗng/lỗi trong localStorage
+              localStorage.removeItem(key);
+            }
+          } catch(e) { console.log('[SA] Lỗi migrate localStorage:', e); }
+          return null;
+        },
+
+        async get(convId) {
+          try {
+            const key = this._key(convId);
+            // Kiểm tra cache trước
+            if (this._cache.has(key)) return this._cache.get(key);
+            // Đọc từ chrome.storage.sync
+            const data = await new Promise((resolve) => {
+              if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
+                chrome.storage.sync.get([key], (res) => resolve(res?.[key] || null));
+              } else { resolve(null); }
+            });
+            if (data && Array.isArray(data)) {
+              this._cache.set(key, data);
+              return data;
+            }
+            // Thử migrate từ localStorage (cho user cũ)
+            const migrated = await this._migrateFromLocalStorage(convId);
+            if (migrated) return migrated;
+            return [];
           } catch(e) { return []; }
         },
 
-        save(convId, summaries) {
+        async save(convId, summaries) {
           try {
-            localStorage.setItem(this._key(convId), JSON.stringify(summaries));
-          } catch(e) {}
+            const key = this._key(convId);
+            this._cache.set(key, summaries); // Update cache ngay
+            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
+              const error = await new Promise((resolve) => {
+                chrome.storage.sync.set({ [key]: summaries }, () => {
+                  resolve(chrome.runtime.lastError || null);
+                });
+              });
+              // Nếu lỗi quota → tự động dọn dẹp rồi thử lại 1 lần
+              if (error && error.message && error.message.includes('QUOTA')) {
+                console.log('[SA] Storage gần đầy, tự động dọn dẹp ngữ cảnh cũ...');
+                await this._autoCleanup(key);
+                await new Promise((resolve) => {
+                  chrome.storage.sync.set({ [key]: summaries }, () => {
+                    if (chrome.runtime.lastError) {
+                      console.log('[SA] Vẫn lỗi sau cleanup:', chrome.runtime.lastError.message);
+                    }
+                    resolve();
+                  });
+                });
+              }
+            }
+          } catch(e) { console.log('[SA] Lỗi lưu ngữ cảnh sync:', e); }
         },
 
-        add(convId, summary) {
-          const summaries = this.get(convId);
+        // Tự động xóa ~30% ngữ cảnh cũ nhất khi storage gần đầy
+        async _autoCleanup(excludeKey) {
+          try {
+            const allData = await new Promise((resolve) => {
+              chrome.storage.sync.get(null, resolve);
+            });
+            // Lọc chỉ lấy keys ngữ cảnh (sa_conv_hist_*)
+            const histKeys = Object.keys(allData).filter(k => k.startsWith(this.STORAGE_PREFIX));
+            if (histKeys.length < 5) return; // Quá ít, không cần dọn
+
+            // Tìm timestamp cũ nhất trong mỗi conversation để sắp xếp
+            const keysWithTime = histKeys
+              .filter(k => k !== excludeKey) // Không xóa key đang cần lưu
+              .map(k => {
+                const entries = allData[k];
+                // Lấy thời gian entry cũ nhất làm mốc
+                let oldest = Infinity;
+                if (Array.isArray(entries)) {
+                  entries.forEach(e => {
+                    if (e && e.time) {
+                      try {
+                        const t = new Date(e.time.replace(/(\d{2})\/(\d{2})\/(\d{4})/, '$3-$2-$1')).getTime();
+                        if (t < oldest) oldest = t;
+                      } catch(ex) {}
+                    }
+                  });
+                }
+                if (oldest === Infinity) oldest = 0; // Không có time → coi là cũ nhất
+                return { key: k, oldest };
+              });
+
+            // Sắp xếp cũ nhất lên đầu → xóa 30%
+            keysWithTime.sort((a, b) => a.oldest - b.oldest);
+            const deleteCount = Math.max(1, Math.ceil(keysWithTime.length * 0.3));
+            const keysToDelete = keysWithTime.slice(0, deleteCount).map(x => x.key);
+
+            if (keysToDelete.length > 0) {
+              await new Promise((resolve) => {
+                chrome.storage.sync.remove(keysToDelete, resolve);
+              });
+              // Xóa cache tương ứng
+              keysToDelete.forEach(k => this._cache.delete(k));
+              console.log(`[SA] Đã tự động xóa ${keysToDelete.length} ngữ cảnh cũ nhất để giải phóng storage.`);
+            }
+          } catch(e) { console.log('[SA] Lỗi auto cleanup:', e); }
+        },
+
+        async add(convId, summary) {
+          const summaries = await this.get(convId);
           summaries.push({ text: summary, time: new Date().toLocaleString('vi-VN') });
           // Xóa quẻ cũ nhất nếu vượt giới hạn
           while (summaries.length > this.MAX_SUMMARIES) {
             summaries.shift();
           }
-          this.save(convId, summaries);
+          await this.save(convId, summaries);
         },
 
-        clear(convId) {
-          try { localStorage.removeItem(this._key(convId)); } catch(e) {}
+        async clear(convId) {
+          try {
+            const key = this._key(convId);
+            this._cache.delete(key); // Xóa cache
+            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
+              await new Promise((resolve) => {
+                chrome.storage.sync.remove(key, resolve);
+              });
+            }
+            // Dọn luôn localStorage cũ nếu còn
+            try { localStorage.removeItem(key); } catch(e) {}
+          } catch(e) {}
         },
 
-        buildContext(convId) {
-          const summaries = this.get(convId);
+        async buildContext(convId) {
+          const summaries = await this.get(convId);
           if (summaries.length === 0) return '';
           let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
           summaries.forEach((s, i) => {
@@ -332,8 +452,8 @@ try {
         await this.init();
         if (!this.isReady()) return null;
 
-        // Lấy ngữ cảnh các quẻ đã luận trước đó cho khách này
-        const historyContext = this.conversationHistory.buildContext(conversationId);
+        // Lấy ngữ cảnh các quẻ đã luận trước đó cho khách này (async — đồng bộ qua chrome.storage.sync)
+        const historyContext = await this.conversationHistory.buildContext(conversationId);
 
         // Yêu cầu AI tóm tắt cuối bài để lưu cho lần sau (nhấn mạnh KHÔNG rút ngắn bài luận)
         const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
@@ -352,8 +472,8 @@ try {
         const summaryMatch = result.match(/\[TÓM[_ ]TẮT\]\s*:?\s*([\s\S]+)$/i);
         if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
           const summary = summaryMatch[1].trim();
-          // Lưu tóm tắt vào lịch sử (tự động xóa quẻ cũ nhất nếu quá 3)
-          this.conversationHistory.add(conversationId, summary);
+          // Lưu tóm tắt vào lịch sử — đồng bộ qua chrome.storage.sync (tự động xóa quẻ cũ nhất nếu quá 3)
+          await this.conversationHistory.add(conversationId, summary);
           // Xóa phần tóm tắt khỏi kết quả trả về cho user (user không thấy phần này)
           result = result.replace(/\n*[-—~*_]*\s*\n*\[TÓM[_ ]TẮT\]\s*:?[\s\S]*$/i, '').trim();
           console.log('[SA] Đã lưu tóm tắt quẻ cho conversation:', conversationId);
@@ -904,10 +1024,10 @@ try {
           btnResetHist.textContent = "🔄";
           btnResetHist.title = "Xóa ngữ cảnh các quẻ trước (reset lịch sử)";
           btnResetHist.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
-          btnResetHist.onclick = (e) => {
+          btnResetHist.onclick = async (e) => {
             stopAll(e);
             const cId = self.utils.getActiveConversationId();
-            self.aiService.conversationHistory.clear(cId);
+            await self.aiService.conversationHistory.clear(cId);
             self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
             btnResetHist.style.opacity = "0.3";
             setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
@@ -1040,9 +1160,9 @@ try {
         btnResetHist.textContent = "🔄";
         btnResetHist.title = "Xóa ngữ cảnh các quẻ trước (reset lịch sử)";
         btnResetHist.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
-        btnResetHist.onclick = () => {
+        btnResetHist.onclick = async () => {
           const cId = self.utils.getActiveConversationId();
-          self.aiService.conversationHistory.clear(cId);
+          await self.aiService.conversationHistory.clear(cId);
           self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
           btnResetHist.style.opacity = "0.3";
           setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
