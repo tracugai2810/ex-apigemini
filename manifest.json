@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuN7eEtOS4xD2vetxn53ou3Dov3KVThrd945kDgM83F6PnvbesgD7PZnrjRbpH5d6yo/rjHOAwne+bwJOchagoXbDdzVokg4lDAf7k3ROlV/jaEwWoeyO9fKSJnnu4vSk5S3ualSbdBSRM4d5cYkjZgGEXHCfKOQtWqt4y9Q5Pfa/hsZNN42K5B3zkI1C3YStiQuL0L90iG/I/RefHlyTY+vLHk+U8TAB/GeWH4W8kq3UF9C1b9N7Vt76/biqTZVqXINwfASi9L4vETxQ/WA7M8DuzxFeeTDHamAES2XPml+2BuWxP6q3zGH/STNh1mK6lY15D+rfoEybXNqrzc1EQQIDAQAB",
   "name": "Sapo Auto Order & AI Popup (tool-kinh-dich)",
   "version": "1.1.0",
   "description": "Sapo Auto Order (tạo đơn, quét OCR) với Gemini + Claude popup",
