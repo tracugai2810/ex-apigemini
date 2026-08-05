@@ -217,8 +217,14 @@ try {
             // 1. Cache RAM (nhanh nhất)
             if (this._cache.has(key)) return this._cache.get(key);
 
-            // 2. Google Sheet (đồng bộ giữa các máy)
-            const result = await this._fetchSheet({ action: 'get', convId: convId });
+            const customerName = this._getCustomerName();
+
+            // 2. Google Sheet (đồng bộ giữa các máy & điện thoại)
+            const result = await this._fetchSheet({
+              action: 'get',
+              convId: convId,
+              customerName: encodeURIComponent(customerName)
+            });
             if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
               this._cache.set(key, result.data);
               this._saveLocal(convId, result.data); // Backup local
@@ -240,19 +246,41 @@ try {
           } catch(e) { return []; }
         },
 
-        async save(convId, summaries) {
+        _getCustomerName() {
+          try {
+            const selectors = [
+              '#dialogue-conversation-container .user-name-meta-data .user-name',
+              '#dialogue-conversation-container [data-for="_tip_conversation-user-name"]',
+              '#dialogue-conversation-container .user-name-first',
+              '#dialogue-conversation-container .user-name',
+              '[data-for="_tip_conversation-user-name"]'
+            ];
+            for (const sel of selectors) {
+              const el = document.querySelector(sel);
+              if (el && el.innerText && el.innerText.trim()) {
+                return el.innerText.trim();
+              }
+            }
+          } catch(e) {}
+          return "";
+        },
+
+        async save(convId, summaries, customerName) {
           try {
             const key = this._key(convId);
             this._cache.set(key, summaries); // Update cache ngay
+
+            const finalName = customerName || this._getCustomerName();
 
             // Ghi lên Google Sheet (đồng bộ)
             const result = await this._fetchSheet({
               action: 'save',
               convId: convId,
+              customerName: encodeURIComponent(finalName),
               data: encodeURIComponent(JSON.stringify(summaries))
             });
             if (result && result.success) {
-              console.log('[SA] ✅ Đã đồng bộ ngữ cảnh lên Google Sheet:', convId);
+              console.log('[SA] ✅ Đã đồng bộ ngữ cảnh lên Google Sheet:', convId, finalName ? `(${finalName})` : '');
             } else {
               console.log('[SA] ⚠️ Không đồng bộ được lên Sheet, chỉ lưu local:', convId);
             }
@@ -262,14 +290,14 @@ try {
           } catch(e) { console.log('[SA] Lỗi lưu ngữ cảnh:', e); }
         },
 
-        async add(convId, summary) {
+        async add(convId, summary, customerName) {
           const summaries = await this.get(convId);
           summaries.push({ text: summary, time: new Date().toLocaleString('vi-VN') });
           // Xóa quẻ cũ nhất nếu vượt giới hạn
           while (summaries.length > this.MAX_SUMMARIES) {
             summaries.shift();
           }
-          await this.save(convId, summaries);
+          await this.save(convId, summaries, customerName);
         },
 
         async clear(convId) {
@@ -482,7 +510,7 @@ try {
       },
 
       // === LUẬN QUẺ CÓ NGỮ CẢNH: Gửi kèm tóm tắt các quẻ trước để AI nhất quán ===
-      async generateTextWithHistory(promptText, conversationId) {
+      async generateTextWithHistory(promptText, conversationId, customerName) {
         await this.init();
         if (!this.isReady()) return null;
 
@@ -506,8 +534,8 @@ try {
         const summaryMatch = result.match(/\[TÓM[_ ]TẮT\]\s*:?\s*([\s\S]+)$/i);
         if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
           const summary = summaryMatch[1].trim();
-          // Lưu tóm tắt vào lịch sử — đồng bộ qua chrome.storage.sync (tự động xóa quẻ cũ nhất nếu quá 3)
-          await this.conversationHistory.add(conversationId, summary);
+          // Lưu tóm tắt vào lịch sử — đồng bộ qua Google Sheet
+          await this.conversationHistory.add(conversationId, summary, customerName);
           // Xóa phần tóm tắt khỏi kết quả trả về cho user (user không thấy phần này)
           result = result.replace(/\n*[-—~*_]*\s*\n*\[TÓM[_ ]TẮT\]\s*:?[\s\S]*$/i, '').trim();
           console.log('[SA] Đã lưu tóm tắt quẻ cho conversation:', conversationId);
@@ -1396,6 +1424,8 @@ try {
       async runPopup(serial, btn, date, question = "", inputEl = null) {
         const self = SapoAuto_v1;
         const originalText = btn ? btn.textContent : "Chữ";
+        // Bắt tên khách hàng NGAY GIÂY PHÚT BẤM NÚT LUẬN (tránh bị lệch khi người dùng đổi tab chat)
+        const capturedCustomerName = self.aiService.conversationHistory._getCustomerName();
         if (btn) {
           btn.textContent = "⌛...";
           btn.disabled = true;
@@ -1494,7 +1524,7 @@ try {
             }
 
             const convId = self.utils.getActiveConversationId();
-            const aiResult = await self.aiService.generateTextWithHistory(prompt, convId);
+            const aiResult = await self.aiService.generateTextWithHistory(prompt, convId, capturedCustomerName);
             
             localStorage.removeItem("sa_loading_txt_" + serial);
 
