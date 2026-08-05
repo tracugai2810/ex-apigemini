@@ -104,59 +104,138 @@ try {
       FALLBACK_MODELS: ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash"],
 
       // === CONVERSATION HISTORY: Lưu tóm tắt quẻ đã luận để AI nhớ ngữ cảnh ===
-      // Dùng chrome.storage.sync để đồng bộ ngữ cảnh giữa các máy tính (cùng tài khoản Google)
+      // Đồng bộ qua Google Sheets (Apps Script) — hoạt động trên mọi máy, mọi trình duyệt
       conversationHistory: {
         STORAGE_PREFIX: 'sa_conv_hist_',
         MAX_SUMMARIES: 3, // Giữ tối đa 3 quẻ gần nhất
-        _cache: new Map(), // In-memory cache để tránh delay khi đọc sync storage
+        _cache: new Map(), // In-memory cache để đọc nhanh trong phiên làm việc
+        _sheetUrl: null,   // URL Google Apps Script (đọc từ settings)
+        _urlLoaded: false,
 
         _key(convId) {
           return this.STORAGE_PREFIX + (convId || 'default');
         },
 
-        // Migrate dữ liệu cũ từ localStorage sang chrome.storage.sync (chạy 1 lần)
-        async _migrateFromLocalStorage(convId) {
+        // Đọc URL Apps Script từ settings (chạy 1 lần)
+        async _ensureUrl() {
+          if (this._urlLoaded) return;
+          this._urlLoaded = true;
+          try {
+            const data = await new Promise((resolve) => {
+              if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
+                chrome.storage.sync.get({ syncSheetUrl: '' }, resolve);
+              } else { resolve({}); }
+            });
+            this._sheetUrl = (data.syncSheetUrl || '').trim();
+            if (this._sheetUrl) console.log('[SA] Sheet URL đã load:', this._sheetUrl.substring(0, 50) + '...');
+          } catch(e) { this._sheetUrl = ''; }
+        },
+
+        // Gọi Google Sheet qua Apps Script (GET request)
+        async _fetchSheet(params) {
+          await this._ensureUrl();
+          if (!this._sheetUrl) return null;
+          try {
+            const url = this._sheetUrl + '?' + new URLSearchParams(params).toString();
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+            const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+            clearTimeout(timeoutId);
+            return await res.json();
+          } catch(e) {
+            console.log('[SA] Lỗi kết nối Google Sheet:', e.message);
+            return null;
+          }
+        },
+
+        // === LOCAL STORAGE (backup/offline) ===
+        async _saveLocal(convId, summaries) {
+          try {
+            const key = this._key(convId);
+            if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+              await new Promise(r => chrome.storage.local.set({ [key]: summaries }, r));
+            }
+          } catch(e) {}
+        },
+        async _getLocal(convId) {
+          try {
+            const key = this._key(convId);
+            if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+              const data = await new Promise(r => chrome.storage.local.get([key], r));
+              return data?.[key] || null;
+            }
+          } catch(e) {}
+          return null;
+        },
+        async _removeLocal(convId) {
+          try {
+            const key = this._key(convId);
+            if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+              await new Promise(r => chrome.storage.local.remove(key, r));
+            }
+          } catch(e) {}
+        },
+
+        // Migrate dữ liệu cũ từ localStorage / chrome.storage.sync (chạy 1 lần)
+        async _migrateOldData(convId) {
+          // 1. Thử localStorage
           try {
             const key = this._key(convId);
             const localData = localStorage.getItem(key);
             if (localData) {
               const parsed = JSON.parse(localData);
               if (Array.isArray(parsed) && parsed.length > 0) {
-                // Lưu lên sync storage
-                await new Promise((resolve) => {
-                  chrome.storage.sync.set({ [key]: parsed }, resolve);
-                });
-                // Xóa khỏi localStorage sau khi migrate thành công
+                await this.save(convId, parsed); // Đẩy lên Sheet + local
                 localStorage.removeItem(key);
-                this._cache.set(key, parsed);
-                console.log('[SA] Đã migrate ngữ cảnh từ localStorage sang sync:', key);
+                console.log('[SA] Đã migrate ngữ cảnh từ localStorage:', key);
                 return parsed;
               }
-              // Dọn dẹp data rỗng/lỗi trong localStorage
               localStorage.removeItem(key);
             }
-          } catch(e) { console.log('[SA] Lỗi migrate localStorage:', e); }
+          } catch(e) {}
+          // 2. Thử chrome.storage.sync (từ phiên bản code trước)
+          try {
+            const key = this._key(convId);
+            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
+              const data = await new Promise(r => chrome.storage.sync.get([key], r));
+              if (data?.[key] && Array.isArray(data[key]) && data[key].length > 0) {
+                await this.save(convId, data[key]); // Đẩy lên Sheet + local
+                chrome.storage.sync.remove(key);
+                console.log('[SA] Đã migrate ngữ cảnh từ chrome.storage.sync:', key);
+                return data[key];
+              }
+            }
+          } catch(e) {}
           return null;
         },
+
+        // === CÁC METHOD CHÍNH ===
 
         async get(convId) {
           try {
             const key = this._key(convId);
-            // Kiểm tra cache trước
+            // 1. Cache RAM (nhanh nhất)
             if (this._cache.has(key)) return this._cache.get(key);
-            // Đọc từ chrome.storage.sync
-            const data = await new Promise((resolve) => {
-              if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
-                chrome.storage.sync.get([key], (res) => resolve(res?.[key] || null));
-              } else { resolve(null); }
-            });
-            if (data && Array.isArray(data)) {
-              this._cache.set(key, data);
-              return data;
+
+            // 2. Google Sheet (đồng bộ giữa các máy)
+            const result = await this._fetchSheet({ action: 'get', convId: convId });
+            if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
+              this._cache.set(key, result.data);
+              this._saveLocal(convId, result.data); // Backup local
+              return result.data;
             }
-            // Thử migrate từ localStorage (cho user cũ)
-            const migrated = await this._migrateFromLocalStorage(convId);
+
+            // 3. Local storage (offline fallback)
+            const localData = await this._getLocal(convId);
+            if (localData && Array.isArray(localData) && localData.length > 0) {
+              this._cache.set(key, localData);
+              return localData;
+            }
+
+            // 4. Migrate dữ liệu cũ (localStorage / chrome.storage.sync)
+            const migrated = await this._migrateOldData(convId);
             if (migrated) return migrated;
+
             return [];
           } catch(e) { return []; }
         },
@@ -165,74 +244,22 @@ try {
           try {
             const key = this._key(convId);
             this._cache.set(key, summaries); // Update cache ngay
-            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
-              const error = await new Promise((resolve) => {
-                chrome.storage.sync.set({ [key]: summaries }, () => {
-                  resolve(chrome.runtime.lastError || null);
-                });
-              });
-              // Nếu lỗi quota → tự động dọn dẹp rồi thử lại 1 lần
-              if (error && error.message && error.message.includes('QUOTA')) {
-                console.log('[SA] Storage gần đầy, tự động dọn dẹp ngữ cảnh cũ...');
-                await this._autoCleanup(key);
-                await new Promise((resolve) => {
-                  chrome.storage.sync.set({ [key]: summaries }, () => {
-                    if (chrome.runtime.lastError) {
-                      console.log('[SA] Vẫn lỗi sau cleanup:', chrome.runtime.lastError.message);
-                    }
-                    resolve();
-                  });
-                });
-              }
-            }
-          } catch(e) { console.log('[SA] Lỗi lưu ngữ cảnh sync:', e); }
-        },
 
-        // Tự động xóa ~30% ngữ cảnh cũ nhất khi storage gần đầy
-        async _autoCleanup(excludeKey) {
-          try {
-            const allData = await new Promise((resolve) => {
-              chrome.storage.sync.get(null, resolve);
+            // Ghi lên Google Sheet (đồng bộ)
+            const result = await this._fetchSheet({
+              action: 'save',
+              convId: convId,
+              data: encodeURIComponent(JSON.stringify(summaries))
             });
-            // Lọc chỉ lấy keys ngữ cảnh (sa_conv_hist_*)
-            const histKeys = Object.keys(allData).filter(k => k.startsWith(this.STORAGE_PREFIX));
-            if (histKeys.length < 5) return; // Quá ít, không cần dọn
-
-            // Tìm timestamp cũ nhất trong mỗi conversation để sắp xếp
-            const keysWithTime = histKeys
-              .filter(k => k !== excludeKey) // Không xóa key đang cần lưu
-              .map(k => {
-                const entries = allData[k];
-                // Lấy thời gian entry cũ nhất làm mốc
-                let oldest = Infinity;
-                if (Array.isArray(entries)) {
-                  entries.forEach(e => {
-                    if (e && e.time) {
-                      try {
-                        const t = new Date(e.time.replace(/(\d{2})\/(\d{2})\/(\d{4})/, '$3-$2-$1')).getTime();
-                        if (t < oldest) oldest = t;
-                      } catch(ex) {}
-                    }
-                  });
-                }
-                if (oldest === Infinity) oldest = 0; // Không có time → coi là cũ nhất
-                return { key: k, oldest };
-              });
-
-            // Sắp xếp cũ nhất lên đầu → xóa 30%
-            keysWithTime.sort((a, b) => a.oldest - b.oldest);
-            const deleteCount = Math.max(1, Math.ceil(keysWithTime.length * 0.3));
-            const keysToDelete = keysWithTime.slice(0, deleteCount).map(x => x.key);
-
-            if (keysToDelete.length > 0) {
-              await new Promise((resolve) => {
-                chrome.storage.sync.remove(keysToDelete, resolve);
-              });
-              // Xóa cache tương ứng
-              keysToDelete.forEach(k => this._cache.delete(k));
-              console.log(`[SA] Đã tự động xóa ${keysToDelete.length} ngữ cảnh cũ nhất để giải phóng storage.`);
+            if (result && result.success) {
+              console.log('[SA] ✅ Đã đồng bộ ngữ cảnh lên Google Sheet:', convId);
+            } else {
+              console.log('[SA] ⚠️ Không đồng bộ được lên Sheet, chỉ lưu local:', convId);
             }
-          } catch(e) { console.log('[SA] Lỗi auto cleanup:', e); }
+
+            // Luôn lưu local làm backup
+            await this._saveLocal(convId, summaries);
+          } catch(e) { console.log('[SA] Lỗi lưu ngữ cảnh:', e); }
         },
 
         async add(convId, summary) {
@@ -248,14 +275,21 @@ try {
         async clear(convId) {
           try {
             const key = this._key(convId);
-            this._cache.delete(key); // Xóa cache
-            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
-              await new Promise((resolve) => {
-                chrome.storage.sync.remove(key, resolve);
-              });
-            }
-            // Dọn luôn localStorage cũ nếu còn
+            this._cache.delete(key);
+
+            // Xóa trên Google Sheet
+            await this._fetchSheet({ action: 'delete', convId: convId });
+
+            // Xóa local
+            await this._removeLocal(convId);
+
+            // Dọn dẹp cũ
             try { localStorage.removeItem(key); } catch(e) {}
+            try {
+              if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
+                chrome.storage.sync.remove(key);
+              }
+            } catch(e) {}
           } catch(e) {}
         },
 
@@ -452,7 +486,7 @@ try {
         await this.init();
         if (!this.isReady()) return null;
 
-        // Lấy ngữ cảnh các quẻ đã luận trước đó cho khách này (async — đồng bộ qua chrome.storage.sync)
+        // Lấy ngữ cảnh các quẻ đã luận trước đó cho khách này (async — đồng bộ qua Google Sheet)
         const historyContext = await this.conversationHistory.buildContext(conversationId);
 
         // Yêu cầu AI tóm tắt cuối bài để lưu cho lần sau (nhấn mạnh KHÔNG rút ngắn bài luận)
@@ -998,11 +1032,9 @@ try {
           questionInput.type = "text";
           questionInput.className = "sa-question-input";
           questionInput.placeholder = "Nhập câu hỏi...";
-          const urlParams = new URLSearchParams(window.location.search);
-          const convId = urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
-          const storageKey = "sa_last_question_" + convId;
-          questionInput.value = localStorage.getItem(storageKey) || "";
-          questionInput.oninput = (e) => localStorage.setItem(storageKey, e.target.value);
+          const qKey = "sa_question_serial_" + val;
+          questionInput.value = localStorage.getItem(qKey) || "";
+          questionInput.oninput = (e) => localStorage.setItem(qKey, e.target.value);
           questionInput.onclick = stopAll;
           questionInput.onmousedown = stopAll;
           questionInput.onmouseup = stopAll;
@@ -1013,7 +1045,7 @@ try {
           btnC.className = "sa-mini-btn btn-c";
           btnC.dataset.serial = val;
           btnC.textContent = "Luận";
-          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim()); };
+          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim(), questionInput); };
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
           self.ui.applySavedState(btnC, val, "Luận", btnC.onclick);
           if (localStorage.getItem("sa_loading_txt_" + val)) { btnC.textContent = "⌛..."; btnC.disabled = true; }
@@ -1137,11 +1169,9 @@ try {
         questionInput.type = "text";
         questionInput.className = "sa-question-input";
         questionInput.placeholder = "Nhập câu hỏi...";
-        const urlParams = new URLSearchParams(window.location.search);
-        const convId = urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
-        const storageKey = "sa_last_question_" + convId;
-        questionInput.value = localStorage.getItem(storageKey) || "";
-        questionInput.oninput = (e) => localStorage.setItem(storageKey, e.target.value);
+        const qKey = "sa_question_serial_" + numOnly;
+        questionInput.value = localStorage.getItem(qKey) || "";
+        questionInput.oninput = (e) => localStorage.setItem(qKey, e.target.value);
         questionInput.onclick = (e) => e.stopPropagation();
         questionInput.onmousedown = (e) => e.stopPropagation();
         questionInput.onkeydown = (e) => e.stopPropagation();
@@ -1150,7 +1180,7 @@ try {
         btnTxt.className = "sa-text-btn btn-txt";
         btnTxt.dataset.serial = numOnly;
         btnTxt.textContent = "Luận";
-        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim());
+        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim(), questionInput);
         self.ui.applySavedState(btnTxt, numOnly, "Luận", btnTxt.onclick);
         if (localStorage.getItem("sa_loading_txt_" + numOnly)) { btnTxt.textContent = "⌛..."; btnTxt.disabled = true; }
         badge.appendChild(btnTxt);
@@ -1363,13 +1393,63 @@ try {
         }, 60000); // Tăng lên 60s để người dùng kịp nhìn lỗi
       },
 
-      async runPopup(serial, btn, date, question = "") {
+      async runPopup(serial, btn, date, question = "", inputEl = null) {
         const self = SapoAuto_v1;
         const originalText = btn ? btn.textContent : "Chữ";
         if (btn) {
           btn.textContent = "⌛...";
           btn.disabled = true;
         }
+
+        // Helper cập nhật trạng thái nút (cập nhật TẤT CẢ nút khớp serial)
+        const updateButtons = (type, content) => {
+          const allBtns = new Set(document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`));
+          if (btn) allBtns.add(btn);
+
+          allBtns.forEach(b => {
+            if (!b) return;
+            b.textContent = "Copy";
+            b.disabled = false;
+            b.style.background = type === 'claude' 
+              ? "linear-gradient(135deg, #22c55e, #16a34a)" 
+              : "linear-gradient(135deg, #f59e0b, #d97706)";
+            b.style.color = "white";
+
+            const origClick = b.onclick;
+            b.onclick = async (e) => {
+              e.stopPropagation(); e.preventDefault();
+              try {
+                await navigator.clipboard.writeText(content);
+                const toastMsg = type === 'claude' ? "📋 Đã copy và mở Claude..." : "📋 Đã copy và mở Gemini...";
+                self.utils.toast(toastMsg, "success");
+                const act = type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup';
+                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                  chrome.runtime.sendMessage({ action: act, conversationId: self.utils.getActiveConversationId() });
+                }
+                b.textContent = originalText;
+                b.style.background = "";
+                b.style.color = "";
+                b.onclick = origClick;
+                localStorage.removeItem("sa_res_" + serial);
+              } catch (err) {
+                self.utils.toast("❌ Lỗi copy: " + err.message, "error");
+              }
+            };
+          });
+        };
+
+        const restoreButtons = () => {
+          const allBtns = new Set(document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`));
+          if (btn) allBtns.add(btn);
+          allBtns.forEach(b => {
+            if (!b) return;
+            b.textContent = originalText;
+            b.disabled = false;
+            b.style.background = "";
+            b.style.color = "";
+          });
+        };
+
         localStorage.setItem("sa_loading_txt_" + serial, "1");
         self.utils.toast("⌛ Đang tải dữ liệu quẻ...", "info");
         
@@ -1417,38 +1497,12 @@ try {
             const aiResult = await self.aiService.generateTextWithHistory(prompt, convId);
             
             localStorage.removeItem("sa_loading_txt_" + serial);
-            let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-            if (currentBtn) btn = currentBtn;
 
             if (aiResult && aiResult.length > 10) {
-              if (btn) {
-                localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'claude', content: aiResult }));
-                needRestore = false;
-                const originalOnClick = btn.onclick;
-                btn.textContent = "Copy";
-                btn.disabled = false;
-                btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
-                btn.style.color = "white";
-                self.utils.toast("✅ ĐÃ LUẬN XONG! Bấm Copy để mở Claude.", "success", 5000);
-                
-                btn.onclick = async (e) => {
-                  e.stopPropagation(); e.preventDefault();
-                  try {
-                    await navigator.clipboard.writeText(aiResult);
-                    self.utils.toast("📋 Đã copy và mở Claude...", "success");
-                    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                      chrome.runtime.sendMessage({ action: 'openClaudeDirectPopup', conversationId: self.utils.getActiveConversationId() });
-                    }
-                    btn.textContent = originalText;
-                    btn.style.background = "";
-                    btn.style.color = "";
-                    btn.onclick = originalOnClick;
-                    localStorage.removeItem("sa_res_" + serial);
-                  } catch (err) {
-                    self.utils.toast("❌ Lỗi copy: " + err.message, "error");
-                  }
-                };
-              }
+              localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'claude', content: aiResult }));
+              needRestore = false;
+              updateButtons('claude', aiResult);
+              self.utils.toast("✅ ĐÃ LUẬN XONG! Bấm Copy để mở Claude.", "success", 5000);
               return; // Dừng luồng tại đây (thành công)
             } else {
               throw new Error("AI trả kết quả rỗng");
@@ -1460,50 +1514,17 @@ try {
 
           // --- FALLBACK TO LEGACY FLOW ---
           localStorage.removeItem("sa_loading_txt_" + serial);
-          let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-          if (currentBtn) btn = currentBtn;
-
-          if (btn) {
-            localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'gemini', content: copyText }));
-            needRestore = false;
-            const originalOnClick = btn.onclick;
-            btn.textContent = "Copy";
-            btn.disabled = false;
-            btn.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
-            btn.style.color = "white";
-            self.utils.toast("✅ ĐÃ LẤY QUẺ! Bấm Copy để mở Gemini.", "success", 5000);
-            
-            btn.onclick = async (e) => {
-              e.stopPropagation(); e.preventDefault();
-              try {
-                await navigator.clipboard.writeText(copyText);
-                self.utils.toast("📋 Đã copy và mở Gemini...", "success");
-                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                  chrome.runtime.sendMessage({ action: 'openGeminiPopup', conversationId: self.utils.getActiveConversationId() });
-                }
-                btn.textContent = originalText;
-                btn.style.background = "";
-                btn.style.color = "";
-                btn.onclick = originalOnClick;
-                localStorage.removeItem("sa_res_" + serial);
-              } catch (err) {
-                self.utils.toast("❌ Lỗi copy: " + err.message, "error");
-              }
-            };
-          }
+          localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'gemini', content: copyText }));
+          needRestore = false;
+          updateButtons('gemini', copyText);
+          self.utils.toast("✅ ĐÃ LẤY QUẺ! Bấm Copy để mở Gemini.", "success", 5000);
         } catch (err) {
           self.utils.toast("❌ Lỗi lập quẻ: " + err.message, "error");
           console.error("[SapoAuto] API Error:", err);
         } finally {
           localStorage.removeItem("sa_loading_txt_" + serial);
-          let currentBtn = document.querySelector(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-          if (currentBtn) btn = currentBtn;
-          
-          if (btn && needRestore) {
-            btn.textContent = originalText;
-            btn.disabled = false;
-          } else if (btn) {
-            btn.disabled = false;
+          if (needRestore) {
+            restoreButtons();
           }
         }
       },

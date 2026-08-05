@@ -14,7 +14,8 @@ const DEFAULTS = {
   geminiApiKey3:   '',
   geminiApiKey4:   '',
   geminiApiKey5:   '',
-  geminiModel:     'gemini-3.1-flash-lite'
+  geminiModel:     'gemini-3.1-flash-lite',
+  syncSheetUrl:    ''
 };
 
 const ids = Object.keys(DEFAULTS);
@@ -65,7 +66,8 @@ function saveSettings() {
     geminiApiKey3: (els.geminiApiKey3.value || '').trim(),
     geminiApiKey4: (els.geminiApiKey4.value || '').trim(),
     geminiApiKey5: (els.geminiApiKey5.value || '').trim(),
-    geminiModel: (els.geminiModel ? els.geminiModel.value : 'gemini-3.1-flash-lite')
+    geminiModel: (els.geminiModel ? els.geminiModel.value : 'gemini-3.1-flash-lite'),
+    syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : '')
   }, () => showStatus('✅ Đã lưu thành công!'));
 }
 
