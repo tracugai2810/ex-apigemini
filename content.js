@@ -209,39 +209,21 @@ try {
           return null;
         },
 
-        // === CÁC METHOD CHÍNH ===
+        // === CÁC METHOD CHÍNH (CHỈ QUÉT GOOGLE SHEET 100%) ===
 
         async get(convId) {
           try {
-            const key = this._key(convId);
-            // 1. Cache RAM (nhanh nhất)
-            if (this._cache.has(key)) return this._cache.get(key);
-
             const customerName = this._getCustomerName();
-
-            // 2. Google Sheet (đồng bộ giữa các máy & điện thoại)
+            // ĐỌC THẲNG TỪ GOOGLE SHEET 100% (Không dùng Cache RAM hay LocalStorage)
             const result = await this._fetchSheet({
               action: 'get',
               convId: convId,
               customerName: encodeURIComponent(customerName)
             });
-            if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
-              this._cache.set(key, result.data);
-              this._saveLocal(convId, result.data); // Backup local
+
+            if (result && result.success && Array.isArray(result.data)) {
               return result.data;
             }
-
-            // 3. Local storage (offline fallback)
-            const localData = await this._getLocal(convId);
-            if (localData && Array.isArray(localData) && localData.length > 0) {
-              this._cache.set(key, localData);
-              return localData;
-            }
-
-            // 4. Migrate dữ liệu cũ (localStorage / chrome.storage.sync)
-            const migrated = await this._migrateOldData(convId);
-            if (migrated) return migrated;
-
             return [];
           } catch(e) { return []; }
         },
@@ -267,37 +249,28 @@ try {
 
         async save(convId, summaries, customerName) {
           try {
-            const key = this._key(convId);
-            this._cache.set(key, summaries); // Update cache ngay
-
             const finalName = customerName || this._getCustomerName();
-
-            // Ghi lên Google Sheet (đồng bộ)
-            const result = await this._fetchSheet({
+            // GHI THẲNG LÊN GOOGLE SHEET 100%
+            await this._fetchSheet({
               action: 'save',
               convId: convId,
               customerName: encodeURIComponent(finalName),
               data: encodeURIComponent(JSON.stringify(summaries))
             });
-            if (result && result.success) {
-              console.log('[SA] ✅ Đã đồng bộ ngữ cảnh lên Google Sheet:', convId, finalName ? `(${finalName})` : '');
-            } else {
-              console.log('[SA] ⚠️ Không đồng bộ được lên Sheet, chỉ lưu local:', convId);
-            }
-
-            // Luôn lưu local làm backup
-            await this._saveLocal(convId, summaries);
           } catch(e) { console.log('[SA] Lỗi lưu ngữ cảnh:', e); }
         },
 
         async add(convId, summary, customerName) {
-          const summaries = await this.get(convId);
-          summaries.push({ text: summary, time: new Date().toLocaleString('vi-VN') });
-          // Xóa quẻ cũ nhất nếu vượt giới hạn
-          while (summaries.length > this.MAX_SUMMARIES) {
-            summaries.shift();
-          }
-          await this.save(convId, summaries, customerName);
+          try {
+            const finalName = customerName || this._getCustomerName();
+            // GỬI TÓM TẮT MỚI THẲNG LÊN GOOGLE SHEET (Server v6.1 sẽ tự gộp với danh sách cũ)
+            await this._fetchSheet({
+              action: 'save',
+              convId: convId,
+              customerName: encodeURIComponent(finalName),
+              data: encodeURIComponent(summary)
+            });
+          } catch(e) { console.log('[SA] Lỗi thêm ngữ cảnh:', e); }
         },
 
         async clear(convId) {
