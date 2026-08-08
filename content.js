@@ -100,8 +100,8 @@ try {
     // 2c. MODULE XỬ LÝ AI (OCR & TEXT GENERATION via Gemini API)
     aiService: {
       apiKeys: [],
-      model: "gemini-3.1-flash-lite",
-      FALLBACK_MODELS: ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash"],
+      model: "gemini-3.5-flash-lite",
+      FALLBACK_MODELS: ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash"],
 
       // === CONVERSATION HISTORY: Lưu tóm tắt quẻ đã luận để AI nhớ ngữ cảnh ===
       // Đồng bộ qua Google Sheets (Apps Script) — hoạt động trên mọi máy, mọi trình duyệt
@@ -311,8 +311,8 @@ try {
         try {
           const data = await new Promise(r => {
             if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
-              chrome.storage.sync.get({ geminiApiKey: "", geminiApiKey2: "", geminiApiKey3: "", geminiApiKey4: "", geminiApiKey5: "", geminiModel: "gemini-3.1-flash-lite" }, r);
-            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.1-flash-lite" }); }
+              chrome.storage.sync.get({ geminiApiKey: "", geminiApiKey2: "", geminiApiKey3: "", geminiApiKey4: "", geminiApiKey5: "", geminiModel: "gemini-3.5-flash-lite" }, r);
+            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.5-flash-lite" }); }
           });
           this.apiKeys = [
             (data.geminiApiKey || "").trim(),
@@ -321,7 +321,7 @@ try {
             (data.geminiApiKey4 || "").trim(),
             (data.geminiApiKey5 || "").trim()
           ].filter(k => k.length > 10);
-          this.model = data.geminiModel || "gemini-3.1-flash-lite";
+          this.model = data.geminiModel || "gemini-3.5-flash-lite";
         } catch(e) { this.apiKeys = []; }
 
         // Phục hồi trí nhớ API từ ổ cứng (LocalStorage) và Reset theo giờ Việt Nam
@@ -397,10 +397,12 @@ try {
             try {
               SapoAuto_v1.utils.log(`${actionName} trying Key ${kIdx+1}, model: ${modelName}`);
               let friendlyName = modelName;
-              if (modelName === 'gemini-3.5-flash') friendlyName = 'Gemini 3.5 Flash';
+              if (modelName === 'gemini-3.5-flash-lite') friendlyName = 'Gemini 3.5 Flash Lite';
               else if (modelName === 'gemini-3.1-flash-lite') friendlyName = 'Gemini 3.1 Flash Lite';
-              else if (modelName === 'gemini-2.5-flash-lite') friendlyName = 'Gemini 2.5 Flash Lite';
+              else if (modelName === 'gemini-3.6-flash') friendlyName = 'Gemini 3.6 Flash';
+              else if (modelName === 'gemini-3.5-flash') friendlyName = 'Gemini 3.5 Flash';
               else if (modelName === 'gemini-3-flash') friendlyName = 'Gemini 3 Flash';
+              else if (modelName === 'gemini-2.5-flash-lite') friendlyName = 'Gemini 2.5 Flash Lite';
               else if (modelName === 'gemini-2.5-flash') friendlyName = 'Gemini 2.5 Flash';
               
               let actText = actionName === "OCR" ? "Quét Seri" : "Gọi AI";
@@ -1456,6 +1458,7 @@ try {
         localStorage.setItem("sa_loading_txt_" + serial, "1");
         self.utils.toast("⌛ Đang tải dữ liệu quẻ...", "info");
         
+        let needRestore = true;
         try {
           const base = self.CONFIG.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
           const baseUrl = base.endsWith('/') ? base : base + '/';
@@ -1481,7 +1484,6 @@ try {
           let copyText = result.copyText;
           
           // --- AI 1-CLICK FLOW ---
-          let needRestore = true;
           try {
             self.utils.toast("⌛ Đang tải Kiến thức & Gọi AI (tối đa 20s)...", "info");
             

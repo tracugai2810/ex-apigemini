@@ -14,7 +14,8 @@ const DEFAULTS = {
   geminiApiKey3:   '',
   geminiApiKey4:   '',
   geminiApiKey5:   '',
-  geminiModel:     'gemini-3.1-flash-lite',
+  geminiModel:     'gemini-3.5-flash-lite',
+  geminiCustomModel: '',
   syncSheetUrl:    ''
 };
 
@@ -29,6 +30,18 @@ function showStatus(msg) {
   setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
 }
 
+function updateCustomModelVisibility() {
+  const modelSelect = els.geminiModel;
+  const customGroup = document.getElementById('customModelGroup');
+  if (modelSelect && customGroup) {
+    if (modelSelect.value === 'custom') {
+      customGroup.style.display = 'block';
+    } else {
+      customGroup.style.display = 'none';
+    }
+  }
+}
+
 function loadSettings() {
   chrome.storage.sync.get(DEFAULTS, (data) => {
     ids.forEach(id => {
@@ -36,6 +49,19 @@ function loadSettings() {
       if (els[id].type === 'checkbox') els[id].checked = data[id];
       else els[id].value = data[id];
     });
+
+    const modelSelect = els.geminiModel;
+    const customInput = els.geminiCustomModel;
+    if (modelSelect && customInput) {
+      const isKnownOption = Array.from(modelSelect.options).some(opt => opt.value === data.geminiModel && opt.value !== 'custom');
+      if (data.geminiModel && !isKnownOption) {
+        modelSelect.value = 'custom';
+        customInput.value = data.geminiModel;
+      } else if (modelSelect.value === 'custom') {
+        customInput.value = data.geminiCustomModel || '';
+      }
+    }
+    updateCustomModelVisibility();
   });
 }
 
@@ -56,6 +82,17 @@ function saveSettings() {
 
   if (gW < 400 || gH < 300 || cW < 400 || cH < 300 || bW < 400 || bH < 300) { showStatus('❌ Kích thước tối thiểu: 400×300'); return; }
 
+  let selectedModel = els.geminiModel ? els.geminiModel.value : 'gemini-3.5-flash-lite';
+  const customModelVal = els.geminiCustomModel ? els.geminiCustomModel.value.trim() : '';
+
+  if (selectedModel === 'custom') {
+    if (!customModelVal) {
+      showStatus('❌ Vui lòng nhập tên model tùy chỉnh!');
+      return;
+    }
+    selectedModel = customModelVal;
+  }
+
   chrome.storage.sync.set({
     geminiUrl: gUrl, geminiWidth: gW, geminiHeight: gH,
     claudeUrl: cUrl, claudeWidth: cW, claudeHeight: cH,
@@ -66,7 +103,8 @@ function saveSettings() {
     geminiApiKey3: (els.geminiApiKey3.value || '').trim(),
     geminiApiKey4: (els.geminiApiKey4.value || '').trim(),
     geminiApiKey5: (els.geminiApiKey5.value || '').trim(),
-    geminiModel: (els.geminiModel ? els.geminiModel.value : 'gemini-3.1-flash-lite'),
+    geminiModel: selectedModel,
+    geminiCustomModel: customModelVal,
     syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : '')
   }, () => showStatus('✅ Đã lưu thành công!'));
 }
@@ -75,6 +113,10 @@ function resetSettings() {
   chrome.storage.sync.set(DEFAULTS, () => { loadSettings(); showStatus('↩ Đã khôi phục mặc định'); });
 }
 
+if (els.geminiModel) {
+  els.geminiModel.addEventListener('change', updateCustomModelVisibility);
+}
 document.getElementById('btnSave').addEventListener('click', saveSettings);
 document.getElementById('btnReset').addEventListener('click', resetSettings);
 loadSettings();
+
