@@ -131,21 +131,27 @@ try {
           } catch(e) { this._sheetUrl = ''; }
         },
 
-        // Gọi Google Sheet qua Apps Script (GET request)
+        // Gọi Google Sheet qua Apps Script (GET request) — Có tự động thử lại khi timeout
         async _fetchSheet(params) {
           await this._ensureUrl();
           if (!this._sheetUrl) return null;
-          try {
-            const url = this._sheetUrl + '?' + new URLSearchParams(params).toString();
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-            const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
-            clearTimeout(timeoutId);
-            return await res.json();
-          } catch(e) {
-            console.log('[SA] Lỗi kết nối Google Sheet:', e.message);
-            return null;
+          const url = this._sheetUrl + '?' + new URLSearchParams(params).toString();
+          const maxRetries = 2; // Thử tối đa 2 lần (lần đầu + 1 lần retry)
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+              const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+              clearTimeout(timeoutId);
+              return await res.json();
+            } catch(e) {
+              console.log(`[SA] Lỗi kết nối Google Sheet (lần ${attempt}/${maxRetries}):`, e.message);
+              if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, 1000)); // Chờ 1s rồi thử lại
+              }
+            }
           }
+          return null;
         },
 
         // === LOCAL STORAGE (backup/offline) ===
