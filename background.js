@@ -193,8 +193,274 @@ async function cleanupStaleSessions() {
 chrome.runtime.onInstalled.addListener(() => cleanupStaleSessions());
 chrome.runtime.onStartup.addListener(() => cleanupStaleSessions());
 
+// === BACKGROUND AI QUE SERVICE (CHẠY TRONG SERVICE WORKER ĐỂ KHÔNG BAO GIỜ BỊ NGẮT KHI ĐỔI TAB / F5) ===
+const bgAiService = {
+  _cachedKinhDichMd: null,
+  FALLBACK_MODELS: [
+    "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", 
+    "gemini-3-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", 
+    "gemini-2.0-flash-lite", "gemini-1.5-flash"
+  ],
+
+  async getSettings() {
+    const data = await chrome.storage.sync.get({
+      geminiApiKey: '',
+      geminiModel: 'gemini-3.7-flash',
+      syncSheetUrl: '',
+      luchaoUrl: 'https://dshc-luc-hao.vercel.app/'
+    });
+    return {
+      apiKey: (data.geminiApiKey || '').trim(),
+      model: data.geminiModel || 'gemini-3.7-flash',
+      syncSheetUrl: (data.syncSheetUrl || '').trim(),
+      luchaoUrl: data.luchaoUrl || 'https://dshc-luc-hao.vercel.app/'
+    };
+  },
+
+  async fetchSheet(syncSheetUrl, params) {
+    if (!syncSheetUrl) return null;
+    const url = syncSheetUrl + '?' + new URLSearchParams(params).toString();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+        clearTimeout(timeoutId);
+        return await res.json();
+      } catch(e) {
+        console.log(`[SA-BG] Lỗi kết nối Google Sheet (lần ${attempt}/2):`, e.message);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 600));
+      }
+    }
+    return null;
+  },
+
+  async buildContext(syncSheetUrl, convId, customerName) {
+    if (!syncSheetUrl) return '';
+    try {
+      const result = await this.fetchSheet(syncSheetUrl, {
+        action: 'get',
+        convId: convId,
+        customerName: encodeURIComponent(customerName || '')
+      });
+      if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
+        let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
+        result.data.forEach((s, i) => {
+          const entry = typeof s === 'string' ? s : s.text;
+          const time = (s && s.time) ? ` (${s.time})` : '';
+          ctx += `\nQuẻ trước #${i + 1}${time}: ${entry}\n`;
+        });
+        return ctx;
+      }
+    } catch(e) {}
+    return '';
+  },
+
+  async saveSummary(syncSheetUrl, convId, summary, customerName) {
+    if (!syncSheetUrl || !summary) return;
+    try {
+      await this.fetchSheet(syncSheetUrl, {
+        action: 'save',
+        convId: convId,
+        customerName: encodeURIComponent(customerName || ''),
+        data: encodeURIComponent(summary)
+      });
+      console.log('[SA-BG] Đã lưu tóm tắt quẻ cho conversation:', convId);
+    } catch(e) {
+      console.error('[SA-BG] Lỗi lưu tóm tắt:', e);
+    }
+  },
+
+  async callModel(modelName, apiKey, payload, timeoutMs = 25000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        }
+      );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData?.error?.message || `Error ${res.status}`;
+        if (res.status === 429 || errMsg.toLowerCase().includes("quota")) {
+          throw { quota: true, message: errMsg, model: modelName };
+        }
+        throw new Error(errMsg);
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
+
+  async executeWithFallback(apiKey, primaryModel, payload, timeoutMs = 45000, onStatusUpdate = null) {
+    if (!apiKey) throw new Error("Chưa cấu hình API Key");
+    const modelName = primaryModel || "gemini-3.7-flash";
+    if (typeof onStatusUpdate === 'function') {
+      onStatusUpdate(`Đang luận quẻ với Gemini (${modelName})...`);
+    }
+    console.log(`[SA-BG] Calling Model: ${modelName}`);
+    const json = await this.callModel(modelName, apiKey, payload, timeoutMs);
+    return { json, modelName };
+  },
+
+  async runAiQue({ serial, date, question, customerName, conversationId }) {
+    console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName})`);
+    const settings = await this.getSettings();
+    const base = settings.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
+    const baseUrl = base.endsWith('/') ? base : base + '/';
+
+    const sendStatus = (msg) => {
+      broadcastMessage({
+        action: 'AI_QUE_STATUS',
+        serial,
+        customerName,
+        message: msg
+      });
+    };
+    
+    sendStatus(`Đang tải dữ liệu quẻ & ngữ cảnh...`);
+
+    // 1. Lập quẻ
+    let apiUrl = `${baseUrl}api/lap-que?serial=${serial}`;
+    if (date) {
+      const p = n => String(n).padStart(2, "0");
+      apiUrl += `&sa_date=${date.year}-${p(date.month)}-${p(date.day)}&sa_hour=${date.hour}&sa_minute=${date.min}`;
+    }
+
+    const cLapQue = new AbortController();
+    const tLapQue = setTimeout(() => cLapQue.abort(), 15000);
+    let lapQueRes;
+    try {
+      lapQueRes = await fetch(apiUrl, { signal: cLapQue.signal });
+    } finally {
+      clearTimeout(tLapQue);
+    }
+
+    if (!lapQueRes.ok) throw new Error(`Lỗi kết nối Lập quẻ (${lapQueRes.status})`);
+    const lapQueData = await lapQueRes.json();
+    if (!lapQueData.success) throw new Error(lapQueData.error || "Không thể lập quẻ.");
+    const copyText = lapQueData.copyText;
+
+    // 2. Tải kinh-dich.md
+    if (!this._cachedKinhDichMd) {
+      try {
+        const cMd = new AbortController();
+        const tMd = setTimeout(() => cMd.abort(), 8000);
+        const mdRes = await fetch(`${baseUrl}kinh-dich.md`, { signal: cMd.signal });
+        clearTimeout(tMd);
+        if (mdRes.ok) this._cachedKinhDichMd = await mdRes.text();
+      } catch(e) {
+        console.log('[SA-BG] Không tải được kinh-dich.md:', e.message);
+      }
+    }
+    const mdContent = this._cachedKinhDichMd || "";
+
+    // 3. Lấy ngữ cảnh cũ
+    const historyContext = await this.buildContext(settings.syncSheetUrl, conversationId, customerName);
+
+    // 4. Tạo prompt
+    const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
+    let prompt = copyText + (question ? (" " + question) : "");
+    if (mdContent) {
+      prompt += `\n\n---\nKiến thức tham khảo:\n${mdContent}`;
+    }
+    const fullPrompt = prompt + historyContext + summaryInstruction;
+
+    // 5. Gọi AI
+    try {
+      sendStatus(`Đang gọi AI (${settings.model})...`);
+      const payload = { contents: [{ parts: [{ text: fullPrompt }] }] };
+      const { json, modelName } = await this.executeWithFallback(settings.apiKey, settings.model, payload, 45000, (msg) => sendStatus(msg));
+      let aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+
+      if (aiResult && aiResult.length > 10) {
+        // Tách tóm tắt
+        const summaryMatch = aiResult.match(/\[TÓM[_ ]TẮT\]\s*:?\s*([\s\S]+)$/i);
+        if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
+          const summary = summaryMatch[1].trim();
+          await this.saveSummary(settings.syncSheetUrl, conversationId, summary, customerName);
+          aiResult = aiResult.replace(/\n*[-—~*_]*\s*\n*\[TÓM[_ ]TẮT\]\s*:?[\s\S]*$/i, '').trim();
+        }
+
+        // Lưu kết quả Claude
+        await chrome.storage.local.set({
+          ['sa_res_' + serial]: JSON.stringify({ type: 'claude', content: aiResult })
+        });
+        await chrome.storage.local.remove('sa_running_' + serial);
+
+        // Broadcast hoàn tất
+        broadcastMessage({
+          action: 'AI_QUE_COMPLETED',
+          serial,
+          type: 'claude',
+          content: aiResult,
+          customerName,
+          model: modelName
+        });
+        return { success: true, type: 'claude', content: aiResult, model: modelName };
+      }
+      throw new Error("AI trả về kết quả rỗng");
+    } catch(aiError) {
+      console.warn('[SA-BG] AI thất bại, fallback sang Gemini web:', aiError);
+      // Fallback Gemini
+      await chrome.storage.local.set({
+        ['sa_res_' + serial]: JSON.stringify({ type: 'gemini', content: copyText })
+      });
+      await chrome.storage.local.remove('sa_running_' + serial);
+
+      broadcastMessage({
+        action: 'AI_QUE_COMPLETED',
+        serial,
+        type: 'gemini',
+        content: copyText,
+        customerName
+      });
+      return { success: true, type: 'gemini', content: copyText };
+    }
+  }
+};
+
+function broadcastMessage(msg) {
+  chrome.tabs.query({}, (tabs) => {
+    if (tabs && tabs.length > 0) {
+      tabs.forEach(tab => {
+        chrome.tabs.sendMessage(tab.id, msg).catch(() => {});
+      });
+    }
+  });
+}
+
 // === MESSAGE HANDLER ===
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
+  if (msg.action === 'startAiQue') {
+    const { serial, date, question, customerName, conversationId } = msg;
+    chrome.storage.local.set({
+      ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '' }
+    });
+
+    bgAiService.runAiQue({ serial, date, question, customerName, conversationId })
+      .catch((err) => {
+        console.error('[SA-BG] Lỗi chạy task Luận quẻ:', err);
+        chrome.storage.local.remove('sa_running_' + serial);
+        broadcastMessage({
+          action: 'AI_QUE_FAILED',
+          serial,
+          error: err.message || 'Lỗi không xác định',
+          customerName
+        });
+      });
+
+    sendResponse({ started: true });
+    return true;
+  }
+
   // Đóng popup business khi nhận được lệnh closePopup từ fb-content.js
   if (msg.action === 'closePopup' && sender.tab && sender.tab.windowId) {
     chrome.windows.remove(sender.tab.windowId).catch(() => {});

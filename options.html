@@ -58,18 +58,15 @@
       <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Đồng bộ ngữ cảnh luận giải giữa các máy tính qua Google Sheet. <a href="https://sheets.google.com" target="_blank" style="color:#60a5fa;">Tạo Sheet</a></p>
     </section>
 
-    <!-- OCR QUÉT SERI -->
+    <!-- OCR QUÉT SERI & AI -->
     <section class="card">
-      <h2>🔍 Quét Seri Tự Động (OCR)</h2>
-      <label for="geminiApiKey">Gemini API Keys (Tối đa 5 Key để dự phòng)</label>
-      <input type="password" id="geminiApiKey" placeholder="Key 1 (Chính): AIza...">
-      <input type="password" id="geminiApiKey2" placeholder="Key 2 (Dự phòng)" style="margin-top:6px;">
-      <input type="password" id="geminiApiKey3" placeholder="Key 3 (Dự phòng)" style="margin-top:6px;">
-      <input type="password" id="geminiApiKey4" placeholder="Key 4 (Dự phòng)" style="margin-top:6px;">
-      <input type="password" id="geminiApiKey5" placeholder="Key 5 (Dự phòng)" style="margin-top:6px;">
+      <h2>🔍 Cấu hình Gemini AI & OCR</h2>
+      <label for="geminiApiKey">Gemini API Key</label>
+      <input type="password" id="geminiApiKey" placeholder="AIza...">
       <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Lấy API key miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#60a5fa;">Google AI Studio</a></p>
       <label for="geminiModel" style="margin-top:8px;">Model AI</label>
       <select id="geminiModel" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
+        <option value="gemini-3.7-flash">🌟 Gemini 3.7 Flash — Mới nhất</option>
         <option value="gemini-3.5-flash-lite">🏆 Gemini 3.5 Flash Lite — 500 lượt/ngày</option>
         <option value="gemini-3.1-flash-lite">🏆 Gemini 3.1 Flash Lite — 500 lượt/ngày</option>
         <option value="gemini-3.6-flash">⚡ Gemini 3.6 Flash — 20 lượt/ngày</option>
@@ -80,9 +77,9 @@
         <option value="custom">✏️ Tùy chỉnh (Nhập tên Model thủ công...)</option>
       </select>
       <div id="customModelGroup" style="display:none;margin-top:6px;">
-        <input type="text" id="geminiCustomModel" placeholder="Nhập mã model (VD: gemini-3.7-flash, gemini-3.5-flash-lite...)" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
+        <input type="text" id="geminiCustomModel" placeholder="Nhập mã model (VD: gemini-3.7-flash, gemini-2.0-flash...)" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
       </div>
-      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Nếu hết quota model này, extension tự thử model khác</p>
+      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
     </section>
 
     <!-- BUSINESS -->

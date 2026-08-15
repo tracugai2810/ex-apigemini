@@ -10,11 +10,7 @@ const DEFAULTS = {
   businessHeight:  600,
   luchaoUrl:       'https://dshc-luc-hao.vercel.app/',
   geminiApiKey:    '',
-  geminiApiKey2:   '',
-  geminiApiKey3:   '',
-  geminiApiKey4:   '',
-  geminiApiKey5:   '',
-  geminiModel:     'gemini-3.5-flash-lite',
+  geminiModel:     'gemini-3.7-flash',
   geminiCustomModel: '',
   syncSheetUrl:    ''
 };
@@ -82,7 +78,7 @@ function saveSettings() {
 
   if (gW < 400 || gH < 300 || cW < 400 || cH < 300 || bW < 400 || bH < 300) { showStatus('❌ Kích thước tối thiểu: 400×300'); return; }
 
-  let selectedModel = els.geminiModel ? els.geminiModel.value : 'gemini-3.5-flash-lite';
+  let selectedModel = els.geminiModel ? els.geminiModel.value : 'gemini-3.7-flash';
   const customModelVal = els.geminiCustomModel ? els.geminiCustomModel.value.trim() : '';
 
   if (selectedModel === 'custom') {
@@ -99,10 +95,6 @@ function saveSettings() {
     businessWidth: bW, businessHeight: bH,
     luchaoUrl: lUrl,
     geminiApiKey: (els.geminiApiKey.value || '').trim(),
-    geminiApiKey2: (els.geminiApiKey2.value || '').trim(),
-    geminiApiKey3: (els.geminiApiKey3.value || '').trim(),
-    geminiApiKey4: (els.geminiApiKey4.value || '').trim(),
-    geminiApiKey5: (els.geminiApiKey5.value || '').trim(),
     geminiModel: selectedModel,
     geminiCustomModel: customModelVal,
     syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : '')

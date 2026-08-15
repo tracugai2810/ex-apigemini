@@ -101,7 +101,11 @@ try {
     aiService: {
       apiKeys: [],
       model: "gemini-3.5-flash-lite",
-      FALLBACK_MODELS: ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash"],
+      FALLBACK_MODELS: [
+        "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", 
+        "gemini-3-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", 
+        "gemini-2.0-flash-lite", "gemini-1.5-flash"
+      ],
 
       // === CONVERSATION HISTORY: Lưu tóm tắt quẻ đã luận để AI nhớ ngữ cảnh ===
       // Đồng bộ qua Google Sheets (Apps Script) — hoạt động trên mọi máy, mọi trình duyệt
@@ -136,18 +140,18 @@ try {
           await this._ensureUrl();
           if (!this._sheetUrl) return null;
           const url = this._sheetUrl + '?' + new URLSearchParams(params).toString();
-          const maxRetries = 2; // Thử tối đa 2 lần (lần đầu + 1 lần retry)
+          const maxRetries = 2; // Thử tối đa 2 lần
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
               const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+              const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout nhanh để không nghẽn AI
               const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
               clearTimeout(timeoutId);
               return await res.json();
             } catch(e) {
               console.log(`[SA] Lỗi kết nối Google Sheet (lần ${attempt}/${maxRetries}):`, e.message);
               if (attempt < maxRetries) {
-                await new Promise(r => setTimeout(r, 1000)); // Chờ 1s rồi thử lại
+                await new Promise(r => setTimeout(r, 600)); // Chờ 600ms rồi thử lại
               }
             }
           }
@@ -317,42 +321,17 @@ try {
         try {
           const data = await new Promise(r => {
             if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
-              chrome.storage.sync.get({ geminiApiKey: "", geminiApiKey2: "", geminiApiKey3: "", geminiApiKey4: "", geminiApiKey5: "", geminiModel: "gemini-3.5-flash-lite" }, r);
-            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.5-flash-lite" }); }
+              chrome.storage.sync.get({ geminiApiKey: "", geminiModel: "gemini-3.7-flash" }, r);
+            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.7-flash" }); }
           });
-          this.apiKeys = [
-            (data.geminiApiKey || "").trim(),
-            (data.geminiApiKey2 || "").trim(),
-            (data.geminiApiKey3 || "").trim(),
-            (data.geminiApiKey4 || "").trim(),
-            (data.geminiApiKey5 || "").trim()
-          ].filter(k => k.length > 10);
-          this.model = data.geminiModel || "gemini-3.5-flash-lite";
-        } catch(e) { this.apiKeys = []; }
-
-        // Phục hồi trí nhớ API từ ổ cứng (LocalStorage) và Reset theo giờ Việt Nam
-        try {
-          const saved = JSON.parse(localStorage.getItem('sa_api_state') || "{}");
-          const vnTime = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (7 * 3600000));
-          const today = vnTime.toISOString().split('T')[0];
-          
-          if (saved.date === today && saved.primaryModel === this.model) {
-            this.currentKeyIdx = saved.keyIdx || 0;
-            this.currentModelIdx = saved.modelIdx || 0;
-          } else {
-            this.currentKeyIdx = saved.keyIdx || 0;
-            this.currentModelIdx = 0;
-            localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: this.currentKeyIdx, modelIdx: 0, primaryModel: this.model }));
-          }
-        } catch(e) {
-          this.currentKeyIdx = 0;
-          this.currentModelIdx = 0;
-        }
+          this.apiKey = (data.geminiApiKey || "").trim();
+          this.model = data.geminiModel || "gemini-3.7-flash";
+        } catch(e) { this.apiKey = ""; }
       },
 
-      isReady() { return this.apiKeys.length > 0; },
+      isReady() { return !!this.apiKey; },
 
-      async _callModel(modelName, apiKey, payload, timeoutMs = 20000) {
+      async _callModel(modelName, apiKey, payload, timeoutMs = 25000) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
@@ -368,9 +347,6 @@ try {
           if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
             const errMsg = errData?.error?.message || `Error ${res.status}`;
-            if (res.status === 429 || errMsg.toLowerCase().includes("quota")) {
-              throw { quota: true, message: errMsg, model: modelName };
-            }
             throw new Error(errMsg);
           }
           return await res.json();
@@ -379,73 +355,13 @@ try {
         }
       },
 
-      currentKeyIdx: 0,
-      currentModelIdx: 0,
-
-      async executeWithFallback(payload, actionName, timeoutMs = 60000) {
+      async executeWithFallback(payload, actionName, timeoutMs = 45000) {
         if (!this.isReady()) throw new Error("Chưa cấu hình API Key");
-        
-        const modelsToTry = [this.model, ...this.FALLBACK_MODELS.filter(m => m !== this.model)];
-        let lastError = null;
-
-        let startKey = this.currentKeyIdx || 0;
-        let startModel = this.currentModelIdx || 0;
-
-        // Quét từng API Key (xoay vòng bắt đầu từ key cuối cùng thành công)
-        for (let i = 0; i < this.apiKeys.length; i++) {
-          const kIdx = (startKey + i) % this.apiKeys.length;
-          const apiKey = this.apiKeys[kIdx];
-          
-          for (let j = 0; j < modelsToTry.length; j++) {
-            if (i === 0 && j < startModel) continue; // Bỏ qua các model đã tịt ở lượt trước
-
-            const modelName = modelsToTry[j];
-            try {
-              SapoAuto_v1.utils.log(`${actionName} trying Key ${kIdx+1}, model: ${modelName}`);
-              let friendlyName = modelName;
-              if (modelName === 'gemini-3.5-flash-lite') friendlyName = 'Gemini 3.5 Flash Lite';
-              else if (modelName === 'gemini-3.1-flash-lite') friendlyName = 'Gemini 3.1 Flash Lite';
-              else if (modelName === 'gemini-3.6-flash') friendlyName = 'Gemini 3.6 Flash';
-              else if (modelName === 'gemini-3.5-flash') friendlyName = 'Gemini 3.5 Flash';
-              else if (modelName === 'gemini-3-flash') friendlyName = 'Gemini 3 Flash';
-              else if (modelName === 'gemini-2.5-flash-lite') friendlyName = 'Gemini 2.5 Flash Lite';
-              else if (modelName === 'gemini-2.5-flash') friendlyName = 'Gemini 2.5 Flash';
-              
-              let actText = actionName === "OCR" ? "Quét Seri" : "Gọi AI";
-              SapoAuto_v1.utils.toast(`⌛ Đang ${actText} (${friendlyName})...`, "info", 0);
-              
-              const json = await this._callModel(modelName, apiKey, payload, timeoutMs);
-              
-              // THÀNH CÔNG: Chốt hạ vị trí này để lần sau dùng tiếp luôn!
-              this.currentKeyIdx = kIdx;
-              this.currentModelIdx = j;
-              try {
-                const vnTime = new Date(new Date().getTime() + (new Date().getTimezoneOffset() * 60000) + (7 * 3600000));
-                const today = vnTime.toISOString().split('T')[0];
-                localStorage.setItem('sa_api_state', JSON.stringify({ date: today, keyIdx: kIdx, modelIdx: j, primaryModel: this.model }));
-              } catch(e) {}
-              
-              return json;
-            } catch (err) {
-              lastError = err;
-              if (err.name === 'AbortError') {
-                 throw new Error("Quá thời gian chờ (Timeout). Dữ liệu gửi đi quá lớn hoặc nghẽn mạng.");
-              }
-              if (err.quota) {
-                SapoAuto_v1.utils.log(`Quota exceeded Key ${kIdx+1}, ${modelName} → Đổi tự động...`);
-                continue;
-              }
-              throw err; 
-            }
-          }
-          startModel = 0; // Sang key mới thì test lại model từ đầu
-        }
-        
-        // Cháy sạch API -> Reset về 0 chờ ngày mai
-        this.currentKeyIdx = 0;
-        this.currentModelIdx = 0;
-        try { localStorage.removeItem('sa_api_state'); } catch(e) {}
-        throw new Error("Tất cả API Keys và Models đều hết quota hoặc lỗi.");
+        const modelName = this.model || "gemini-3.7-flash";
+        SapoAuto_v1.utils.log(`${actionName} model: ${modelName}`);
+        let actText = actionName === "OCR" ? "Quét Seri" : "Gọi AI";
+        SapoAuto_v1.utils.toast(`⌛ Đang ${actText} (${modelName})...`, "info", 0);
+        return await this._callModel(modelName, this.apiKey, payload, timeoutMs);
       },
 
       async scanSerial(imgSrc) {
@@ -813,7 +729,20 @@ try {
 
       applySavedState(btn, serial, originalText, originalOnClick) {
         const savedStr = localStorage.getItem("sa_res_" + serial);
-        if (!savedStr) return;
+        if (!savedStr) {
+          // Thử lấy từ chrome.storage.local nếu localStorage chưa kịp ghi
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.get(["sa_res_" + serial], (res) => {
+              if (res && res["sa_res_" + serial]) {
+                try {
+                  localStorage.setItem("sa_res_" + serial, res["sa_res_" + serial]);
+                  SapoAuto_v1.ui.applySavedState(btn, serial, originalText, originalOnClick);
+                } catch(e) {}
+              }
+            });
+          }
+          return;
+        }
         try {
           const saved = JSON.parse(savedStr);
           btn.textContent = "Copy";
@@ -828,22 +757,55 @@ try {
              e.stopPropagation(); e.preventDefault();
              try {
                await navigator.clipboard.writeText(saved.content);
-               SapoAuto_v1.utils.toast("📋 Đã copy...", "success");
+               const toastMsg = saved.type === 'claude' ? "📋 Đã copy và mở Claude..." : "📋 Đã copy và mở Gemini...";
+               SapoAuto_v1.utils.toast(toastMsg, "success");
                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
                  chrome.runtime.sendMessage({ 
                    action: saved.type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup',
                    conversationId: SapoAuto_v1.utils.getActiveConversationId()
                  });
                }
-               btn.textContent = originalText;
+               btn.textContent = originalText || "Luận";
                btn.style.background = "";
                btn.style.color = "";
-               btn.onclick = originalOnClick;
+               btn.disabled = false;
+               if (typeof originalOnClick === 'function') {
+                 btn.onclick = originalOnClick;
+               }
                localStorage.removeItem("sa_res_" + serial);
+               if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+                 chrome.storage.local.remove("sa_res_" + serial);
+               }
              } catch (err) {
                SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
              }
           };
+        } catch(e) {}
+      },
+
+      applyRunningState(btn, serial) {
+        try {
+          const raw = localStorage.getItem("sa_running_" + serial);
+          if (raw) {
+            const run = JSON.parse(raw);
+            if (run && run.startTime && (Date.now() - run.startTime < 120000)) {
+              btn.textContent = "⌛...";
+              btn.disabled = true;
+              return;
+            } else {
+              localStorage.removeItem("sa_running_" + serial);
+            }
+          }
+          // Thử sync từ chrome.storage.local
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.get(["sa_running_" + serial], (res) => {
+              const r = res?.[("sa_running_" + serial)];
+              if (r && r.startTime && (Date.now() - r.startTime < 120000)) {
+                btn.textContent = "⌛...";
+                btn.disabled = true;
+              }
+            });
+          }
         } catch(e) {}
       },
 
@@ -1034,7 +996,6 @@ try {
           btnA.onclick = (e) => { stopAll(e); self.textScan.runImage(val, btnA, getPickerDate()); };
           btnA.onmousedown = stopAll; btnA.onmouseup = stopAll;
           self.ui.applySavedStateImage(btnA, val, "Ảnh", btnA.onclick);
-          if (localStorage.getItem("sa_loading_img_" + val)) { btnA.textContent = "⌛..."; btnA.disabled = true; }
           actionGroup.appendChild(btnA);
 
           const questionInput = document.createElement("input");
@@ -1057,7 +1018,7 @@ try {
           btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim(), questionInput); };
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
           self.ui.applySavedState(btnC, val, "Luận", btnC.onclick);
-          if (localStorage.getItem("sa_loading_txt_" + val)) { btnC.textContent = "⌛..."; btnC.disabled = true; }
+          self.ui.applyRunningState(btnC, val);
           actionGroup.appendChild(btnC);
 
           const btnResetHist = document.createElement("button");
@@ -1171,7 +1132,6 @@ try {
         btnImg.textContent = "Ảnh";
         btnImg.onclick = () => self.textScan.runImage(numOnly, btnImg, getPickerDate());
         self.ui.applySavedStateImage(btnImg, numOnly, "Ảnh", btnImg.onclick);
-        if (localStorage.getItem("sa_loading_img_" + numOnly)) { btnImg.textContent = "⌛..."; btnImg.disabled = true; }
         badge.appendChild(btnImg);
 
         const questionInput = document.createElement("input");
@@ -1191,7 +1151,7 @@ try {
         btnTxt.textContent = "Luận";
         btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim(), questionInput);
         self.ui.applySavedState(btnTxt, numOnly, "Luận", btnTxt.onclick);
-        if (localStorage.getItem("sa_loading_txt_" + numOnly)) { btnTxt.textContent = "⌛..."; btnTxt.disabled = true; }
+        self.ui.applyRunningState(btnTxt, numOnly);
         badge.appendChild(btnTxt);
 
         const btnResetHist = document.createElement("button");
@@ -1292,6 +1252,8 @@ try {
         });
       },
 
+      _cachedKinhDichMd: null,
+
       buildUrl(serial, date, mode) {
         const base = SapoAuto_v1.CONFIG.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
         const u = new URL(base);
@@ -1309,9 +1271,10 @@ try {
       async runImage(serial, btn, date) {
         const self = SapoAuto_v1;
         self.utils.toast("⌛ Đang mở cửa sổ lập quẻ...", "info");
-        btn.textContent = "⌛...";
-        btn.disabled = true;
-        localStorage.setItem("sa_loading_img_" + serial, "1");
+        if (btn) {
+          btn.textContent = "⌛...";
+          btn.disabled = true;
+        }
 
         const url = self.textScan.buildUrl(serial, date, "image");
         
@@ -1322,7 +1285,11 @@ try {
         box.className = "sa-popup-box";
         const close = document.createElement("button");
         close.textContent = "×"; close.className = "sa-popup-close";
-        close.onclick = () => { overlay.remove(); btn.textContent = "Ảnh"; btn.disabled = false; };
+        close.onclick = () => {
+          overlay.remove();
+          let curBtn = document.querySelector(`.btn-a[data-serial="${serial}"], .btn-img[data-serial="${serial}"]`) || btn;
+          if (curBtn) { curBtn.textContent = "Ảnh"; curBtn.disabled = false; }
+        };
         
         const iframe = document.createElement("iframe");
         iframe.src = url;
@@ -1349,7 +1316,6 @@ try {
             // Xóa overlay ngay — không cần giữ iframe tàng hình nữa
             overlay.remove();
             
-            localStorage.removeItem("sa_loading_img_" + serial);
             let currentBtn = document.querySelector(`.btn-a[data-serial="${serial}"], .btn-img[data-serial="${serial}"]`);
             if (currentBtn) btn = currentBtn;
 
@@ -1394,17 +1360,17 @@ try {
         
         setTimeout(() => {
           if (!finished && document.body.contains(overlay)) {
-            self.utils.toast("❌ Quá thời gian. Kiểm tra cửa sổ popup xem có lỗi gì không.", "error");
-            localStorage.removeItem("sa_loading_img_" + serial);
+            self.utils.toast("❌ Quá thời gian tải ảnh.", "error");
+            overlay.remove();
             let currentBtn = document.querySelector(`.btn-a[data-serial="${serial}"], .btn-img[data-serial="${serial}"]`);
             if (currentBtn) { currentBtn.textContent = "Ảnh"; currentBtn.disabled = false; }
           }
-        }, 60000); // Tăng lên 60s để người dùng kịp nhìn lỗi
+        }, 40000);
       },
 
       async runPopup(serial, btn, date, question = "", inputEl = null) {
         const self = SapoAuto_v1;
-        const originalText = btn ? btn.textContent : "Chữ";
+        const originalText = (btn && (btn.classList.contains("btn-txt-only") || btn.classList.contains("btn-c-only"))) ? "Chữ" : "Luận";
         // Bắt tên khách hàng NGAY GIÂY PHÚT BẤM NÚT LUẬN (tránh bị lệch khi người dùng đổi tab chat)
         const capturedCustomerName = self.aiService.conversationHistory._getCustomerName();
         if (btn) {
@@ -1412,137 +1378,37 @@ try {
           btn.disabled = true;
         }
 
-        // Helper cập nhật trạng thái nút (cập nhật TẤT CẢ nút khớp serial)
-        const updateButtons = (type, content) => {
-          const allBtns = new Set(document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`));
-          if (btn) allBtns.add(btn);
-
-          allBtns.forEach(b => {
-            if (!b) return;
-            b.textContent = "Copy";
-            b.disabled = false;
-            b.style.background = type === 'claude' 
-              ? "linear-gradient(135deg, #22c55e, #16a34a)" 
-              : "linear-gradient(135deg, #f59e0b, #d97706)";
-            b.style.color = "white";
-
-            const origClick = b.onclick;
-            b.onclick = async (e) => {
-              e.stopPropagation(); e.preventDefault();
-              try {
-                await navigator.clipboard.writeText(content);
-                const toastMsg = type === 'claude' ? "📋 Đã copy và mở Claude..." : "📋 Đã copy và mở Gemini...";
-                self.utils.toast(toastMsg, "success");
-                const act = type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup';
-                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                  chrome.runtime.sendMessage({ action: act, conversationId: self.utils.getActiveConversationId() });
-                }
-                b.textContent = originalText;
-                b.style.background = "";
-                b.style.color = "";
-                b.onclick = origClick;
-                localStorage.removeItem("sa_res_" + serial);
-              } catch (err) {
-                self.utils.toast("❌ Lỗi copy: " + err.message, "error");
-              }
-            };
-          });
-        };
-
-        const restoreButtons = () => {
-          const allBtns = new Set(document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`));
-          if (btn) allBtns.add(btn);
-          allBtns.forEach(b => {
-            if (!b) return;
-            b.textContent = originalText;
-            b.disabled = false;
-            b.style.background = "";
-            b.style.color = "";
-          });
-        };
-
-        localStorage.setItem("sa_loading_txt_" + serial, "1");
-        self.utils.toast("⌛ Đang tải dữ liệu quẻ...", "info");
-        
-        let needRestore = true;
+        // Đánh dấu đang chạy ngầm trong cả localStorage và chrome.storage.local (kèm timestamp)
+        const runInfo = { startTime: Date.now(), customerName: capturedCustomerName };
         try {
-          const base = self.CONFIG.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
-          const baseUrl = base.endsWith('/') ? base : base + '/';
-          let apiUrl = `${baseUrl}api/lap-que?serial=${serial}`;
-          if (date) {
-            const p = n => String(n).padStart(2, "0");
-            const saDate = `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}`;
-            const saHour = date.getHours();
-            const saMin = date.getMinutes();
-            apiUrl += `&sa_date=${saDate}&sa_hour=${saHour}&sa_minute=${saMin}`;
+          localStorage.setItem("sa_running_" + serial, JSON.stringify(runInfo));
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.set({ ['sa_running_' + serial]: runInfo });
           }
+        } catch(e) {}
 
-          const response = await fetch(apiUrl);
-          if (!response.ok) {
-            throw new Error(`API error: ${response.status}`);
-          }
+        const convId = self.utils.getActiveConversationId();
+        const dateObj = date ? { year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate(), hour: date.getHours(), min: date.getMinutes() } : null;
+        const currentModel = self.aiService.model || "Gemini";
 
-          const result = await response.json();
-          if (!result.success) {
-            throw new Error(result.error || "Không thể lập quẻ.");
-          }
+        self.utils.toast(`⌛ [${capturedCustomerName || serial}] Đang gọi AI (${currentModel})...`, "info");
 
-          let copyText = result.copyText;
-          
-          // --- AI 1-CLICK FLOW ---
-          try {
-            self.utils.toast("⌛ Đang tải Kiến thức & Gọi AI (tối đa 20s)...", "info");
-            
-            let mdContent = "";
-            try {
-               const mdRes = await fetch(`${baseUrl}kinh-dich.md`);
-               if (mdRes.ok) mdContent = await mdRes.text();
-            } catch(e) { console.log("Không tải được kinh-dich.md"); }
-            
-            let prompt = copyText + (question ? (" " + question) : "");
-            if (mdContent) {
-               prompt += `\n\n---\nKiến thức tham khảo:\n${mdContent}`;
-            }
-
-            const convId = self.utils.getActiveConversationId();
-            const aiResult = await self.aiService.generateTextWithHistory(prompt, convId, capturedCustomerName);
-            
-            localStorage.removeItem("sa_loading_txt_" + serial);
-
-            if (aiResult && aiResult.length > 10) {
-              localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'claude', content: aiResult }));
-              needRestore = false;
-              updateButtons('claude', aiResult);
-              self.utils.toast("✅ ĐÃ LUẬN XONG! Bấm Copy để mở Claude.", "success", 5000);
-              return; // Dừng luồng tại đây (thành công)
-            } else {
-              throw new Error("AI trả kết quả rỗng");
-            }
-          } catch (aiError) {
-            console.error("Lỗi gọi AI:", aiError);
-            self.utils.toast("⚠️ AI lỗi/quá tải. Tự động chuyển luồng cũ!", "error");
-          }
-
-          // --- FALLBACK TO LEGACY FLOW ---
-          localStorage.removeItem("sa_loading_txt_" + serial);
-          localStorage.setItem("sa_res_" + serial, JSON.stringify({ type: 'gemini', content: copyText }));
-          needRestore = false;
-          updateButtons('gemini', copyText);
-          self.utils.toast("✅ ĐÃ LẤY QUẺ! Bấm Copy để mở Gemini.", "success", 5000);
-        } catch (err) {
-          self.utils.toast("❌ Lỗi lập quẻ: " + err.message, "error");
-          console.error("[SapoAuto] API Error:", err);
-        } finally {
-          localStorage.removeItem("sa_loading_txt_" + serial);
-          if (needRestore) {
-            restoreButtons();
-          }
+        // Gửi lệnh xử lý sang Background Service Worker (Không bao giờ bị tắt khi đổi tab hay F5)
+        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({
+            action: 'startAiQue',
+            serial,
+            date: dateObj,
+            question,
+            customerName: capturedCustomerName,
+            conversationId: convId
+          });
         }
       },
 
       async runPopupTextOnly(serial, btn, date) {
         const self = SapoAuto_v1;
-        const originalText = btn ? btn.textContent : "Chữ";
+        const originalText = "Chữ";
         if (btn) {
           btn.textContent = "⌛...";
           btn.disabled = true;
@@ -1561,7 +1427,15 @@ try {
             apiUrl += `&sa_date=${saDate}&sa_hour=${saHour}&sa_minute=${saMin}`;
           }
 
-          const response = await fetch(apiUrl);
+          const controller2 = new AbortController();
+          const timeoutId2 = setTimeout(() => controller2.abort(), 15000);
+          let response;
+          try {
+            response = await fetch(apiUrl, { signal: controller2.signal });
+          } finally {
+            clearTimeout(timeoutId2);
+          }
+
           if (!response.ok) {
             throw new Error(`API error: ${response.status}`);
           }
@@ -1596,6 +1470,64 @@ try {
 
     init() {
       const self = SapoAuto_v1;
+
+      // === TỰ ĐỘNG DỌN DẸP CỜ LOADING CŨ KHI F5/MỞ TRANG (CHỐNG TREO ⌛ VĨNH VIỄN) ===
+      try {
+        Object.keys(localStorage).forEach(k => {
+          if (k.startsWith("sa_running_")) {
+            try {
+              const run = JSON.parse(localStorage.getItem(k) || "{}");
+              if (!run.startTime || Date.now() - run.startTime > 120000) {
+                localStorage.removeItem(k);
+              }
+            } catch(e) { localStorage.removeItem(k); }
+          }
+          if (k.startsWith("sa_loading_")) {
+            localStorage.removeItem(k);
+          }
+        });
+      } catch(e) {}
+
+      // === LẮNG NGHE KẾT QUẢ AI TỪ BACKGROUND SERVICE WORKER ===
+      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
+        chrome.runtime.onMessage.addListener((msg) => {
+          if (msg.action === 'AI_QUE_STATUS') {
+            const { customerName, message } = msg;
+            self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
+          } else if (msg.action === 'AI_QUE_COMPLETED') {
+            const { serial, type, content, customerName, model } = msg;
+            try {
+              localStorage.setItem("sa_res_" + serial, JSON.stringify({ type, content }));
+              localStorage.removeItem("sa_running_" + serial);
+            } catch(e) {}
+
+            // Cập nhật tất cả các nút trùng serial trên màn hình hiện tại
+            const allBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+            allBtns.forEach(b => {
+              self.ui.applySavedState(b, serial, "Luận", b.onclick);
+            });
+
+            const toastType = type === 'claude' ? 'Claude' : 'Gemini';
+            const modelTag = model ? ` (${model})` : '';
+            self.utils.toast(`✅ [${customerName || serial}] ĐÃ LUẬN XONG${modelTag}! Bấm Copy để mở ${toastType}.`, "success", 5000);
+          } else if (msg.action === 'AI_QUE_FAILED') {
+            const { serial, error, customerName } = msg;
+            try {
+              localStorage.removeItem("sa_running_" + serial);
+            } catch(e) {}
+
+            const allBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+            allBtns.forEach(b => {
+              b.textContent = "Luận";
+              b.disabled = false;
+              b.style.background = "";
+              b.style.color = "";
+            });
+
+            self.utils.toast(`❌ [${customerName || serial}] Lỗi luận quẻ: ${error}`, "error", 5000);
+          }
+        });
+      }
 
       // === LẮNG NGHE TOKEN & PAGE INFO TỪ inject.js ===
       window.addEventListener("message", (event) => {
