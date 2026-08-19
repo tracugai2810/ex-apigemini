@@ -1535,6 +1535,24 @@ try {
         if (event.data?.type === "SAPO_TOKEN") {
           self.STATE.myToken = event.data.token;
           self.utils.log("Token captured ✓");
+          // Tự động đồng bộ Token lên Google Apps Script (gasBankingUrl)
+          if (event.data.token && !self.STATE._tokenSynced) {
+            self.STATE._tokenSynced = true;
+            try {
+              if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+                chrome.storage.sync.get({ gasBankingUrl: '' }, (res) => {
+                  if (res.gasBankingUrl && res.gasBankingUrl.startsWith('https://')) {
+                    fetch(res.gasBankingUrl, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                      body: JSON.stringify({ action: 'sync_token', token: event.data.token }),
+                      mode: 'no-cors'
+                    }).catch(() => {});
+                  }
+                });
+              }
+            } catch(e) {}
+          }
         }
         if (event.data?.type === "SAPO_PAGE_INFO" && event.data.page_id) {
           // Lưu per-conversation: dùng conversation_id từ inject.js hoặc từ URL hiện tại
@@ -1550,6 +1568,22 @@ try {
             });
             self.utils.log("PageMap updated:", convId, "→", event.data.page_id);
           }
+        }
+        if (event.data?.type === "SAPO_PAGES" && Array.isArray(event.data.page_ids) && event.data.page_ids.length > 0) {
+          try {
+            if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+              chrome.storage.sync.get({ gasBankingUrl: '' }, (res) => {
+                if (res.gasBankingUrl && res.gasBankingUrl.startsWith('https://')) {
+                  fetch(res.gasBankingUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({ action: 'sync_pages', page_ids: event.data.page_ids }),
+                    mode: 'no-cors'
+                  }).catch(() => {});
+                }
+              });
+            }
+          } catch(e) {}
         }
       });
       

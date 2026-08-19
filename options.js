@@ -12,7 +12,8 @@ const DEFAULTS = {
   geminiApiKey:    '',
   geminiModel:     'gemini-3.7-flash',
   geminiCustomModel: '',
-  syncSheetUrl:    ''
+  syncSheetUrl:    '',
+  gasBankingUrl:   ''
 };
 
 const ids = Object.keys(DEFAULTS);
@@ -97,7 +98,8 @@ function saveSettings() {
     geminiApiKey: (els.geminiApiKey.value || '').trim(),
     geminiModel: selectedModel,
     geminiCustomModel: customModelVal,
-    syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : '')
+    syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : ''),
+    gasBankingUrl: (els.gasBankingUrl ? els.gasBankingUrl.value.trim() : '')
   }, () => showStatus('✅ Đã lưu thành công!'));
 }
 

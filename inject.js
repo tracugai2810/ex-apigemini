@@ -123,6 +123,20 @@
                             }
                         }
                     }
+                    // Tự động bắt tất cả page_id từ danh sách hội thoại hoặc trang
+                    var list = data?.conversations || data?.pages || data?.data || (Array.isArray(data) ? data : []);
+                    if (Array.isArray(list) && list.length > 0) {
+                        var pids = [];
+                        list.forEach(function(item) {
+                            var p = item.page_id || (item.page_ids && item.page_ids[0]) || (url.indexOf('/api/pages') !== -1 ? (item.id || item._id) : null);
+                            if (p && typeof p === 'string' && p.length > 10 && pids.indexOf(p) === -1) {
+                                pids.push(p);
+                            }
+                        });
+                        if (pids.length > 0) {
+                            window.postMessage({ type: "SAPO_PAGES", page_ids: pids }, "*");
+                        }
+                    }
                 } catch(e) {}
             }
         });
