@@ -1,0 +1,1182 @@
+/**
+ * ==============================================================================
+ * HỆ THỐNG HỢP NHẤT: BÁO SỐ DƯ ZALO BOT + TỰ ĐỘNG TẠO ĐƠN SAPO 24/7 (v2.0)
+ * ==============================================================================
+ * 1. BÁO BIẾN ĐỘNG SỐ DƯ VPBANK VỀ ZALO BOT (Giữ nguyên 100% gốc không lỗi).
+ * 2. TỰ ĐỘNG QUÉT SAPO MOBILE 3 TRANG (2 Facebook + 1 Instagram).
+ * 3. TỰ ĐỘNG SO KHỚP TÊN FACEBOOK & TẠO ĐƠN SAPO (20k, 50k, 500k).
+ * 4. TỰ ĐỘNG NỐI ĐƠN CHO KHÁCH QUEN CHUYỂN KHOẢN LẦN 2, LẦN 3...
+ * ==============================================================================
+ */
+
+// ============================================
+// 1. CẤU HÌNH HỆ THỐNG
+// ============================================
+const CONFIG = {
+  // Google Sheet Database (Tự động liên kết hoặc theo ID)
+  spreadsheetId: "16_wFwhakio-ManT-ksrj69mTsV-YJwmQTfB89zhdV-Q",
+
+  // Cấu hình VPBank
+  vpbankUrl: "https://neo.vpbank.com.vn/cb/odata/ns/authenticationservice/GetNonSecureNotificationShare",
+  vpbankAuthKey: "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhTGlzdCI6W3siY2lmIjoiNWJiZTU0MmIwZGQxYWE2NmZkZDIzMDc0OWRkYWUyZmVmYjM4MTdkNmYyYzQ4OWNhMTZiYjEyMzYzNDI0YTNlZSIsImF1dGhDb2RlIjoiMDdCMS01NkNGLUUwMTYtNEY4QyIsImlkIjoidklwTEY2a0pWd2loaTRrUVhRVThzQT09In0seyJjaWYiOiI1YmJlNTQyYjBkZDFhYTY2ZmRkMjMwNzQ5ZGRhZTJmZWZiMzgxN2Q2ZjJjNDg5Y2ExNmJiMTIzNjM0MjRhM2VlIiwiYXV0aENvZGUiOiJENDAwLTIyQTMtMTRFQi00QkUwIiwiaWQiOiJ2SXBMRjZrSlZ3aWhpNGtRWFFVOHNBPT0ifV19.j8Ay1d4Y8HQcKM1U-bo-dgOyhRBa-dJzw2q6yUehJwUX0DcJ32YvO0HDb_Vn8_1pMDGzwEdBeizeEiJwZrgGR5MccDaliTpvfcKVzihRjYASuWemW_ESahxpzEBfockVarStQCy8MTOVhrShWm9_sK0dWC0-gxjK297_s9EvaUCerKDuY7Zie0wuv3ogTylCW5528nS_S6x3nkUsaPZV-0ApsFc3HFyborJBOCGJ3_bFcTIaagLuGZSnqtp-IC3jEl0UspFXELFXn1BWfk-hr9HatiRjHvmanFV9AiBdcfqPzJOUlC_kmw7OTcUrSt3Dj-Z7j9o0kx2y9xWM-074qQ",
+  vpbankCookie: "JSESSIONID=BBF6AAB06AD4C187533BEE43A835C6FA.plf16.cluster02; TS0150b0a9=01a16eb740fc79189e24270faaa6f122dbbbcc463649cf44e62a6c44b110d96a89c54a0ee0b777711c77e189313a5ad1a5d623e6dae714c0db3aba2757ce867e61863805c924de86609ad6a2d272fbf5104db24973; visid_incap_3015578=U/aZlFRtQs+8y1qTd9vL4GhEpGgAAAAAQUIPAAAAAADtALzXIGn3vjks8zH4Svrb; visid_incap_3231153=0QdSeQUeR9KUGZrBMc7/HGhEpGgAAAAAQUIPAAAAAACESZofnh/13Qgfh8DdEVYc; _ga=GA1.1.1787817507.1755595881; _tt_enable_cookie=1; _ttp=01K30TPEMNPX4XBBE568GVNG80_.tt.2; _ga_CMESFBNESX=GS2.1.s1755595880$o1$g1$t1755595919$j21$l0$h0; _ga_5WZYZ85N6T=GS2.1.s1755595880$o1$g1$t1755595919$j21$l0$h0; visid_incap_3018148=I0cF3vNWSiGUT/fupsHx2oMb6mgAAAAAQUIPAAAAAADuvAWGPQZRUqPxAyi0nb0Z; nlbi_3015578=SMjBKq+Flh6/MY4nn453ygAAAACrqjOOxEBDto/RGOe39NtD; incap_ses_310_3015578=ojj1MAS1zkM49ZUM5VdNBJnRzGkAAAAAvzpB9Ww+5qyB/5RlrVvKLw==; _gcl_au=1.1.834952289.1775030683; _fbp=fb.2.1775030683396.565204236279683016; _clck=12jp1x5%5E2%5Eg4u%5E0%5E2057; _clsk=1ixtk33%5E1775030705303%5E3%5E1%5Eo.clarity.ms%2Fcollect; ttcsid_CQ1UBG3C77UEB9QOL5I0=1775030683430::BZ4GjMeOwZwHerMOfKiV.2.1775030741331.1; ttcsid=1775030683431::3DQE_ncqgBLoKUdGTidf.2.1775030741331.0::1.21225.10806::62591.36.583.1424::68157.32.1179; visid_incap_3228765=D9MGwiGZR8uhtf60J6j69yPSzGkAAAAAQUIPAAAAAAD8TCuiz8fJ+YUpNxeoPYAd; nlbi_3228765=wzNJRtbHSiwLZ6pseo5ypgAAAADhXUAKKo3LZYS+Bc4L/fx3; incap_ses_310_3228765=uE4uNYLXDhwrR5kM5VdNBCPSzGkAAAAAbUumWv5X7qf7uK+iHrCS2Q==; VPBank=\u0021blA4NX8uHWcwNow0sspyYCpk/UaZI5oISzgQ/9E4bOfEna9Ug5xvAAwAfDtTmX5j0qJ9WuX1eiFfrg==; _ga_SW2XL3ZBET=GS2.1.s1775030682$o2$g1$t1775030930$j60$l0$h0; _ga_HQVR5X8NB7=GS2.1.s1775030683$o2$g1$t1775030930$j60$l0$h0; nlbi_3228765_2147483392=ihVSZFZBMlqEzJdBeo5ypgAAAADfDsmp7I47kvoFp8nzmeZ6; TS01818c4f=01a16eb7402f3950de7abd4caab976eaabd3915ec87a1d35741ba0c63fbea0b20c800dd3ceec897be864d271c49b8fffff66a559b2d406c8c4d8019a6bb86add5dfcde1515; incap_ses_310_3018148=nCmfY++JOxELSBQN5VdNBAXqzGkAAAAAQ9M60b1pAF23z1rD+4GD3A==; TS817da101027=08bb1f4d6cab2000f2b2e9114681ee32d286049661f4b3a2d364dfb0c64a3c14b9823ad2620bbb2d0875aff5b6113000148b30096072598b24f882c081b7c4148492cdd905f5e45552bf068020f68bdb805f0065d451677e639fee2e8d1aed90",
+  vpbankKeyshare: "D400-22A3-14EB-4BE0",
+  vpbankPinshare: "909827",
+  vpbankAccountNumber: "all",
+
+  // Cấu hình Zalo Bot
+  zaloBotToken: "3073746206060021864:GWMFIXfAUfEjPVnCDeGBKzOVCnrRLwSzzsmeZgesdHSDgRroZeSwKzAPooFyPLVg",
+  zaloChatId: "df91ba9c9ad0738e2ac1",
+  bootstrapWithoutNotification: false,
+  digestEntryLimit: 10,
+
+  // Cấu hình Sapo
+  sapoTenant: "janet.mysapo.net",
+  pageIds: [
+    "694cbdb3244df9d04b46c3cf", // Page 1: Shop Trà Củ Gai Chính Hãng
+    "6a2c19eea4970700019c9d55", // Page 2: Xem Kinh Dịch & Tử Vi - Chi 20K
+    "6961e838244df9d04bb4deb0"  // Page 3: Xem Quẻ Kinh Dịch - Chi 20K (Instagram)
+  ],
+  locationId: 885876,
+  tagIdBangGia: "696219a92feb720001b8e624", // Tag "Gửi bảng giá"
+  tagIdDaThanhToan: "6a87fe78314f04000121a29c", // Tag "Đã thanh toán" màu vàng
+
+  // Danh mục sản phẩm tạo đơn Sapo
+  products: {
+    20000:  { variantId: 185634645, sku: "KDTV-CB", title: "Sản phẩm - 20K" },
+    50000:  { variantId: 185634646, sku: "KDTV-CT", title: "Sản phẩm - Chi Tiết" },
+    500000: { variantId: 185634647, sku: "KDTV-CS", title: "Sản phẩm - 500K" }
+  }
+};
+
+const STORE_KEYS = {
+  lastCheckedAt: "LAST_CHECKED_AT",
+  lastDigest: "LAST_DIGEST_VP",
+  lastTopEntryKey: "LAST_TOP_ENTRY_KEY_VP",
+  balance: "CURRENT_BALANCE",
+  sapoToken: "SAPO_TOKEN"
+};
+
+// ============================================
+// 2. KHỞI TẠO BẢNG TÍNH GOOGLE SHEET
+// ============================================
+function initSheets() {
+  const ss = getSpreadsheet_();
+  if (!ss) {
+    Logger.log("❌ Lỗi: Chưa tìm thấy Google Sheet. Hãy mở Script từ menu Tiện ích mở rộng của Sheet.");
+    return;
+  }
+
+  // 1. Tạo sheet Transfers
+  let transferSheet = ss.getSheetByName("Transfers");
+  if (!transferSheet) {
+    transferSheet = ss.insertSheet("Transfers");
+    transferSheet.appendRow([
+      "STT", "convId", "pageId", "fbPageId", "Tên Khách", 
+      "Trạng Thái", "Số Tiền", "Mã Đơn Sapo", "Thời Gian Gắn Nhãn", "Thời Gian Tạo Đơn"
+    ]);
+    transferSheet.getRange("A1:J1").setFontWeight("bold").setBackground("#e2e8f0");
+    transferSheet.setFrozenRows(1);
+  }
+
+  // 2. Tạo sheet Config
+  let configSheet = ss.getSheetByName("Config");
+  if (!configSheet) {
+    configSheet = ss.insertSheet("Config");
+    configSheet.appendRow(["Key", "Value", "Cập Nhật Lúc"]);
+    configSheet.getRange("A1:C1").setFontWeight("bold").setBackground("#e2e8f0");
+    configSheet.setFrozenRows(1);
+    
+    configSheet.appendRow(["sapo_token", "", new Date().toLocaleString("vi-VN")]);
+    configSheet.appendRow(["tenant", CONFIG.sapoTenant, new Date().toLocaleString("vi-VN")]);
+    configSheet.appendRow(["location_id", CONFIG.locationId, new Date().toLocaleString("vi-VN")]);
+  }
+
+  Logger.log("✅ Khởi tạo Google Sheet thành công: " + ss.getUrl());
+}
+
+// ============================================
+// 3. HÀM CHÍNH TRIGGER QUÉT 24/7 (Set 1 phút/lần)
+// ============================================
+function checkFundNow() {
+  const store = PropertiesService.getScriptProperties();
+  const timeNow = new Date().toLocaleString("vi-VN");
+  Logger.log("=== 🚀 BẮT ĐẦU CHU KỲ QUÉT [" + timeNow + "] ===");
+
+  // BƯỚC 1: Quét hội thoại Sapo Mobile TRƯỚC để nạp khách mới vào Sheet
+  try {
+    scanMobileTaggedConversations_();
+  } catch (eScan) {
+    Logger.log("❌ Lỗi quét Sapo Mobile: " + eScan.message);
+  }
+
+  // BƯỚC 2: Quét biến động VPBank -> Tự tạo đơn Sapo (1 lần duy nhất) + Bắn Zalo
+  try {
+    const vpbankEntries = fetchVPBankEntries_();
+    if (vpbankEntries && vpbankEntries.length > 0) {
+      Logger.log("🏦 VPBank: Đọc được " + vpbankEntries.length + " giao dịch gần nhất.");
+      processSource_(vpbankEntries, store, "VPBANK");
+    } else {
+      Logger.log("🏦 VPBank: Không có giao dịch mới.");
+    }
+  } catch (eVP) {
+    Logger.log("❌ Lỗi VPBank: " + eVP.message);
+  }
+
+  Logger.log("=== ✅ HOÀN THÀNH CHU KỲ QUÉT ===");
+}
+
+// ============================================
+// 4. XỬ LÝ GIAO DỊCH VPBANK: ZALO BOT + SAPO AUTO ORDER
+// ============================================
+function processSource_(entries, store, sourceKey) {
+  const digestKey = STORE_KEYS.lastDigest;
+  const topEntryKeyKey = STORE_KEYS.lastTopEntryKey;
+  
+  const limitedEntries = entries.slice(0, CONFIG.digestEntryLimit);
+  const currentDigest = buildDigest_(limitedEntries);
+  const currentTopKey = buildEntryKey_(limitedEntries[0]);
+  
+  const previousDigest = store.getProperty(digestKey);
+  const previousTopKey = store.getProperty(topEntryKeyKey);
+  const isFirstRun = !previousDigest;
+
+  if (isFirstRun && CONFIG.bootstrapWithoutNotification) {
+    store.setProperty(digestKey, currentDigest);
+    store.setProperty(topEntryKeyKey, currentTopKey);
+    Logger.log("[" + sourceKey + "] Bootstrap complete.");
+    return;
+  }
+
+  if (currentDigest === previousDigest) {
+    Logger.log("ℹ️ VPBank: Không có giao dịch phát sinh mới.");
+    return;
+  }
+
+  const newEntries = getNewEntries_(limitedEntries, previousTopKey);
+  if (newEntries.length > 0) {
+    const currentBalance = parseFloat(store.getProperty(STORE_KEYS.balance) || "0");
+    let runningBalance = currentBalance;
+    
+    const processedEntries = newEntries.slice().reverse().map(function(e) {
+      const val = e.amountValue;
+      if (e.sign === "+") {
+        runningBalance += val;
+      } else {
+        runningBalance -= val;
+      }
+      e.balanceAfter = runningBalance;
+      return e;
+    });
+
+    // 1. XỬ LÝ TỰ ĐỘNG TẠO ĐƠN SAPO NẾU LÀ TIỀN VÀO HỢP LỆ (20k, 50k, 500k) TRƯỚC KHI GỬI ZALO
+    const validAmounts = [20000, 50000, 500000];
+    newEntries.forEach(function(entry) {
+      if (entry.sign === "+" && validAmounts.includes(entry.amountValue)) {
+        const orderResult = processAutoOrderForEntry_(entry);
+        if (orderResult && orderResult.success) {
+          entry.orderStatus = { isAutoScan: true, success: true, customerName: orderResult.customerName };
+        } else {
+          entry.orderStatus = { isAutoScan: true, success: false };
+        }
+      }
+    });
+
+    // 2. GỬI THÔNG BÁO VỀ ZALO BOT (KÈM TRẠNG THÁI TẠO ĐƠN)
+    sendFundNotification_(processedEntries.reverse());
+    store.setProperty(STORE_KEYS.balance, runningBalance.toString());
+  }
+
+  store.setProperty(digestKey, currentDigest);
+  store.setProperty(topEntryKeyKey, currentTopKey);
+}
+
+// ----------------------------------
+// TỰ ĐỘNG TẠO ĐƠN SAPO (CHẠY 1 LẦN DUY NHẤT)
+// ----------------------------------
+function processAutoOrderForEntry_(entry) {
+  Logger.log("⚡ Xử lý tạo đơn cho giao dịch: " + entry.amount + " | ND: " + entry.name);
+  
+  // So khớp thuần theo Tên Facebook của khách hàng
+  const record = findPendingCustomerByName_(entry.name);
+  if (!record) {
+    Logger.log("⚠️ Chưa tìm thấy khách nào khớp với Tên FB trong nội dung: " + entry.name);
+    return { success: false, reason: "Không tìm thấy khách" };
+  }
+
+  const token = getSapoToken_();
+  if (!token) {
+    Logger.log("❌ Không có Token Sapo! Mở trình duyệt PC để extension tự động đồng bộ token.");
+    return { success: false, reason: "Thiếu Token" };
+  }
+
+  try {
+    Logger.log("🛒 Tạo đơn Sapo cho khách: " + record.customerName + " (Gói: " + entry.amountValue + "đ, Page: " + record.pageId + ")");
+    const orderResult = createSapoOrder_({
+      conversationId: record.convId,
+      pageId: record.pageId,
+      fbPageId: record.fbPageId,
+      customerName: record.customerName,
+      amount: entry.amountValue,
+      token: token,
+      tenant: CONFIG.sapoTenant
+    });
+
+    if (orderResult && orderResult.success) {
+      updateTransferRecordStatus_(record.rowNumber, "ORDERED", entry.amountValue, orderResult.orderId);
+      Logger.log("✅ ĐÃ TẠO ĐƠN THÀNH CÔNG! Mã đơn Sapo: #" + orderResult.orderId);
+      return { success: true, orderId: orderResult.orderId, customerName: record.customerName };
+    } else {
+      Logger.log("❌ Lỗi tạo đơn Sapo: " + (orderResult ? orderResult.error : "Không rõ nguyên nhân"));
+      return { success: false, reason: orderResult ? orderResult.error : "Lỗi API Sapo" };
+    }
+  } catch (err) {
+    Logger.log("❌ Ngoại lệ khi tạo đơn: " + err.message);
+    return { success: false, reason: err.message };
+  }
+}
+
+// ============================================
+// 5. CHUỖI 3 BƯỚC TẠO ĐƠN SAPO HOÀN CHỈNH
+// ============================================
+function createSapoOrder_(params) {
+  const { conversationId, pageId, fbPageId, customerName, amount, token, tenant } = params;
+  const product = CONFIG.products[amount];
+  if (!product) {
+    return { success: false, error: "Không tìm thấy gói sản phẩm cho số tiền: " + amount };
+  }
+
+  const useTenant = tenant || CONFIG.sapoTenant;
+  const baseHeaders = {
+    "Content-Type": "application/json",
+    "X-Bizweb-App-Fpage-Token": token,
+    "X-Sapo-Tenant": useTenant
+  };
+
+  const sourceUrl = "https://sapo-socials.sapoapps.vn/social/all?conversationId=" + encodeURIComponent(conversationId) + "&tenant=" + encodeURIComponent(useTenant);
+
+  // BƯỚC 1: Khởi tạo Checkout (KHỚP EXTENSION — không gửi shipping/billing address, không gửi line_items)
+  const step1Url = "https://sapo-socials.sapoapps.vn/api/checkouts?is_create_new=false&language=vi";
+  const step1Payload = {
+    page_id: pageId,
+    conversation_id: conversationId,
+    conversation_id_url_param: conversationId,
+    source_url: sourceUrl,
+    checkout: {
+      automatic_discounts_override: true,
+      buyer_accepts_marketing: false,
+      inventory_behaviour: "decrement_obeying_policy_in_specify_location",
+      location_id: CONFIG.locationId,
+      requires_billing_address: false,
+      requires_email: false,
+      requires_shipping_address: false,
+      requires_shipping_method: false,
+      user_id: ""
+    }
+  };
+
+  const res1 = UrlFetchApp.fetch(step1Url, {
+    method: "post",
+    headers: baseHeaders,
+    payload: JSON.stringify(step1Payload),
+    muteHttpExceptions: true
+  });
+
+  let data1 = {};
+  try { data1 = JSON.parse(res1.getContentText()); } catch(e) {}
+
+  const checkoutToken = data1.checkout?.token || data1?.token;
+  if (!checkoutToken) {
+    return { success: false, error: "Step 1 HTTP " + res1.getResponseCode() + ": " + res1.getContentText().substring(0, 200) };
+  }
+
+  const s1CustomerId = data1.checkout?.customer_id;
+
+  // BƯỚC 2: Chốt đơn với sản phẩm (KHỚP EXTENSION — shipping_address: null, billing_address: null, payment_details)
+  const step2Url = "https://sapo-socials.sapoapps.vn/api/checkouts/" + checkoutToken + "/complete?conversation_id=" + encodeURIComponent(conversationId) + "&page_id=" + encodeURIComponent(pageId) + "&language=vi";
+
+  const step2CheckoutObj = {
+    buyer_accepts_marketing: false,
+    requires_shipping_method: false,
+    requires_billing_address: false,
+    applied_discounts: [],
+    automatic_discounts_override: true,
+    billing_address: null,
+    currency: "VND",
+    discount_codes: [],
+    fulfillment_details: null,
+    inventory_behaviour: "decrement_obeying_policy_in_specify_location",
+    location_id: CONFIG.locationId,
+    name: customerName || "Khách",
+    note: "Đơn tự động chuyển khoản VPBank (" + product.title + ")",
+    note_attributes: [],
+    phone: null,
+    requires_email: false,
+    requires_shipping_address: false,
+    shipping_address: null,
+    shipping_lines: [],
+    tax_exempt: null,
+    user_id: "",
+    payment_details: {
+      payment_method_id: 6708489,
+      gateway: "Tiền mặt",
+      amount: amount,
+      reference: ""
+    },
+    line_items: [{
+      variant_id: product.variantId,
+      custom: false,
+      quantity: 1,
+      title: product.title,
+      price: amount,
+      price_override: amount,
+      requires_shipping: false,
+      taxable: false
+    }]
+  };
+
+  if (s1CustomerId) step2CheckoutObj.customer_id = s1CustomerId;
+
+  const step2Payload = {
+    page_id: pageId,
+    conversation_id: conversationId,
+    conversation_id_url_param: conversationId,
+    facebook_page_id: fbPageId || null,
+    source_url: sourceUrl,
+    comment_id: null,
+    checkout: step2CheckoutObj
+  };
+
+  const res2 = UrlFetchApp.fetch(step2Url, {
+    method: "post",
+    headers: baseHeaders,
+    payload: JSON.stringify(step2Payload),
+    muteHttpExceptions: true
+  });
+
+  if (res2.getResponseCode() >= 300) {
+    return { success: false, error: "Step 2 HTTP " + res2.getResponseCode() + ": " + res2.getContentText().substring(0, 300) };
+  }
+
+  const data2 = JSON.parse(res2.getContentText());
+  const orderObj = data2.order || data2.checkout?.order || data2;
+  const orderId = orderObj.id || data2.checkout?.order_id;
+
+  if (!orderId) {
+    return { success: false, error: "Step 2 không trả về Order ID" };
+  }
+
+  // BƯỚC 3: Xác nhận giao hàng (KHỚP EXTENSION — payload đơn giản)
+  try {
+    const step3Url = "https://sapo-socials.sapoapps.vn/api/order/fulfillments/" + orderId + "?language=vi";
+    const step3Payload = {
+      delivery_method: "pick_up",
+      delivery_status: "delivered"
+    };
+
+    UrlFetchApp.fetch(step3Url, {
+      method: "post",
+      headers: baseHeaders,
+      payload: JSON.stringify(step3Payload),
+      muteHttpExceptions: true
+    });
+  } catch (errFulfill) {}
+
+  // BƯỚC 4: Tự động gắn nhãn "Đã thanh toán" (màu vàng) cho đúng hội thoại vừa tạo đơn
+  try {
+    const step4Url = "https://sapo-socials.sapoapps.vn/api/conversations/" + conversationId + "/tags?language=vi";
+    const step4Payload = {
+      tag_id: CONFIG.tagIdDaThanhToan || "6a87fe78314f04000121a29c",
+      page_id: pageId
+    };
+
+    UrlFetchApp.fetch(step4Url, {
+      method: "post",
+      headers: baseHeaders,
+      payload: JSON.stringify(step4Payload),
+      muteHttpExceptions: true
+    });
+    Logger.log("🏷️ Đã tự động gắn nhãn 'Đã thanh toán' cho hội thoại: " + conversationId);
+  } catch (errTag) {
+    Logger.log("⚠️ Lỗi gắn nhãn (không ảnh hưởng đơn): " + errTag.message);
+  }
+
+  return {
+    success: true,
+    orderId: orderId,
+    orderNumber: orderObj.order_number || orderObj.name || orderId
+  };
+}
+
+// ============================================
+// 6. QUÉT HỘI THOẠI GẮN NHÃN TỪ MOBILE (DI ĐỘNG)
+// ============================================
+function kiemTraTokenVaQuetNgay() {
+  const token = getSapoToken_();
+  if (!token) {
+    Logger.log("❌ CHƯA CÓ TOKEN TRONG HỆ THỐNG!");
+    Logger.log("👉 Hãy mở tab Sapo trên máy tính và bấm F5 để Extension gửi token sang.");
+    return;
+  }
+  Logger.log("✅ ĐÃ CÓ TOKEN: " + token.substring(0, 20) + "...");
+  scanMobileTaggedConversations_();
+}
+
+function scanMobileTaggedConversations_() {
+  const token = getSapoToken_();
+  if (!token) {
+    Logger.log("⚠️ scanMobileTaggedConversations_: Chưa có Sapo Token! Mở trình duyệt PC F5 trang Sapo để Extension đồng bộ token.");
+    return;
+  }
+
+  // 1. Tự động lấy tất cả các Tag ID liên quan đến "Bảng giá" từ Sapo
+  let bangGiaTagIds = [CONFIG.tagIdBangGia];
+  try {
+    const tagsUrl = "https://sapo-socials.sapoapps.vn/api/tags?language=vi";
+    const tagsRes = UrlFetchApp.fetch(tagsUrl, {
+      method: "get",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bizweb-App-Fpage-Token": token,
+        "X-Sapo-Tenant": CONFIG.sapoTenant
+      },
+      muteHttpExceptions: true
+    });
+    if (tagsRes.getResponseCode() === 200) {
+      const tagsData = JSON.parse(tagsRes.getContentText());
+      const tagList = tagsData?.tags || tagsData?.data || (Array.isArray(tagsData) ? tagsData : []);
+      tagList.forEach(function(t) {
+        const tid = String(t.id || t._id || t.tag_id || "").trim();
+        const tname = String(t.name || t.title || t.text || "").toLowerCase();
+        if (tname.includes("bảng giá") || tname.includes("gui bang gia") || tname.includes("banggia")) {
+          if (tid && !bangGiaTagIds.includes(tid)) {
+            bangGiaTagIds.push(tid);
+          }
+        }
+      });
+    }
+  } catch(eTags) {}
+
+  // 2. Tự động lấy toàn bộ danh sách Page từ Sapo + Bộ nhớ Extension
+  let pageIdList = [
+    "694cbdb3244df9d04b46c3cf",
+    "694cbdb3244df9d04b46c3d4",
+    "6961e838244df9d04bb4deb0"
+  ];
+
+  try {
+    const storePids = JSON.parse(PropertiesService.getScriptProperties().getProperty("SAPO_PAGE_IDS") || "[]");
+    storePids.forEach(function(p) {
+      if (p && !pageIdList.includes(p)) pageIdList.push(p);
+    });
+  } catch(e) {}
+
+  try {
+    const pUrl = "https://sapo-socials.sapoapps.vn/api/pages?language=vi";
+    const pRes = UrlFetchApp.fetch(pUrl, {
+      method: "get",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bizweb-App-Fpage-Token": token,
+        "X-Sapo-Tenant": CONFIG.sapoTenant
+      },
+      muteHttpExceptions: true
+    });
+    if (pRes.getResponseCode() === 200) {
+      const pData = JSON.parse(pRes.getContentText());
+      const pList = pData?.pages || pData?.data || (Array.isArray(pData) ? pData : []);
+      pList.forEach(function(p) {
+        const pid = String(p.id || p._id || p.page_id || "").trim();
+        if (pid && !pageIdList.includes(pid)) pageIdList.push(pid);
+      });
+    }
+  } catch(eP) {}
+
+  Logger.log("📱 Quét Mobile: Đang quét " + pageIdList.length + " Pages (" + pageIdList.join(", ") + ")...");
+
+  const seenConvIds = {};
+
+  function processConvList_(convs, sourceLabel) {
+    if (!convs || !Array.isArray(convs)) return;
+    convs.forEach(function(conv) {
+      const convId = conv.id || conv.conversation_id;
+      if (!convId || seenConvIds[convId]) return;
+      seenConvIds[convId] = true;
+
+      const pageId = conv.page_id || conv.pageId || "";
+      const fbPageId = conv.facebook_page_id || conv.facebookPageId || "";
+      const customerName = conv.customer_name || conv.account_name || conv.name || conv.fb_user_name || "Khách Hàng";
+
+      // KIỂM TRA HỘI THOẠI CÓ GẮN NHÃN BẢNG GIÁ HAY KHÔNG
+      const rawTags = conv.tags || conv.tag_ids || conv.tag_id_list || [];
+      let hasTagBangGia = false;
+
+      if (Array.isArray(rawTags)) {
+        for (let t = 0; t < rawTags.length; t++) {
+          const tag = rawTags[t];
+          const tagId = String(typeof tag === 'object' ? (tag.id || tag._id || tag.tag_id || "") : tag).trim();
+          const tagName = String(typeof tag === 'object' ? (tag.name || tag.title || tag.text || "") : "").toLowerCase();
+          
+          if (bangGiaTagIds.includes(tagId) || tagName.includes("bảng giá") || tagName.includes("gui bang gia")) {
+            hasTagBangGia = true;
+            break;
+          }
+        }
+      } else if (typeof rawTags === 'string') {
+        for (let k = 0; k < bangGiaTagIds.length; k++) {
+          if (rawTags.includes(bangGiaTagIds[k])) {
+            hasTagBangGia = true;
+            break;
+          }
+        }
+        if (rawTags.toLowerCase().includes("bảng giá") || rawTags.toLowerCase().includes("gui bang gia")) {
+          hasTagBangGia = true;
+        }
+      }
+
+      if (!hasTagBangGia) return;
+
+      const existing = findPendingRecordByConvId_(convId);
+      if (!existing) {
+        registerPendingTransfer_({
+          convId: convId,
+          pageId: pageId,
+          fbPageId: fbPageId,
+          customerName: customerName
+        });
+        Logger.log("📱 Mobile: Đã thêm khách '" + customerName + "' (convId: " + convId + ", Page: " + pageId + ") vào Google Sheet!");
+      }
+    });
+  }
+
+  // --- NGUỒN 1: Quét hộp thư kết hợp tất cả các Page IDs (Limit 100 hội thoại) ---
+  try {
+    const combinedUrl = "https://sapo-socials.sapoapps.vn/api/conversations?page_ids=" + pageIdList.join(",") + "&page=1&limit=100&language=vi";
+    const cRes = UrlFetchApp.fetch(combinedUrl, {
+      method: "get",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bizweb-App-Fpage-Token": token,
+        "X-Sapo-Tenant": CONFIG.sapoTenant
+      },
+      muteHttpExceptions: true
+    });
+    if (cRes.getResponseCode() === 200) {
+      const cData = JSON.parse(cRes.getContentText());
+      const cList = cData?.conversations || cData?.data || (Array.isArray(cData) ? cData : []);
+      Logger.log("📥 Hộp thư kết hợp: Đọc được " + cList.length + " hội thoại gần nhất.");
+      processConvList_(cList, "Hộp thư kết hợp");
+    }
+  } catch(eComb) {
+    Logger.log("Lỗi hộp thư kết hợp: " + eComb.message);
+  }
+
+  // --- NGUỒN 2: Quét quét độc lập từng Page (Limit 50 hội thoại mỗi page) ---
+  pageIdList.forEach(function(pid) {
+    try {
+      const url = "https://sapo-socials.sapoapps.vn/api/conversations?page_ids=" + pid + "&page=1&limit=50&language=vi";
+      const res = UrlFetchApp.fetch(url, {
+        method: "get",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Bizweb-App-Fpage-Token": token,
+          "X-Sapo-Tenant": CONFIG.sapoTenant
+        },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() === 200) {
+        const data = JSON.parse(res.getContentText());
+        const conversations = data?.conversations || data?.data || (Array.isArray(data) ? data : []);
+        processConvList_(conversations, "Page " + pid);
+      }
+    } catch(errPage) {}
+  });
+}
+
+// ============================================
+// 7. DATABASE GOOGLE SHEETS & SO KHỚP TÊN THÔNG MINH
+// ============================================
+function removeVietnameseTones_(str) {
+  if (!str) return "";
+  str = String(str);
+  // 1. Chuẩn hóa Unicode NFD để bóc tách toàn bộ dấu tổ hợp tiếng Việt
+  try {
+    str = str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  } catch (e) {}
+  // 2. Thay thế bảng mã ký tự tiếng Việt có dấu dựng sẵn (NFC)
+  str = str.replace(/à|á|ạ|ả|ã|â|ầ|ấ|ậ|ẩ|ẫ|ă|ằ|ắ|ặ|ẳ|ẵ/g, "a");
+  str = str.replace(/è|é|ẹ|ẻ|ẽ|ê|ề|ế|ệ|ể|ễ/g, "e");
+  str = str.replace(/ì|í|ị|ỉ|ĩ/g, "i");
+  str = str.replace(/ò|ó|ọ|ỏ|õ|ô|ồ|ố|ộ|ổ|ỗ|ơ|ờ|ớ|ợ|ở|ỡ/g, "o");
+  str = str.replace(/ù|ú|ụ|ủ|ũ|ư|ừ|ứ|ự|ử|ữ/g, "u");
+  str = str.replace(/ỳ|ý|ỵ|ỷ|ỹ/g, "y");
+  str = str.replace(/đ/g, "d");
+  str = str.replace(/À|Á|Ạ|Ả|Ã|Â|Ầ|Ấ|Ậ|Ẩ|Ẫ|Ă|Ằ|Ắ|Ặ|Ẳ|Ẵ/g, "A");
+  str = str.replace(/È|É|Ẹ|Ẻ|Ẽ|Ê|Ề|Ế|Ệ|Ể|Ễ/g, "E");
+  str = str.replace(/Ì|Í|Ị|Ỉ|Ĩ/g, "I");
+  str = str.replace(/Ò|Ó|Ọ|Ỏ|Õ|Ô|Ồ|Ố|Ộ|Ổ|Ỗ|Ơ|Ờ|Ớ|Ợ|Ở|Ỡ/g, "O");
+  str = str.replace(/Ù|Ú|Ụ|Ủ|Ũ|Ư|Ừ|Ứ|Ự|Ử|Ữ/g, "U");
+  str = str.replace(/Ỳ|Ý|Ṇ|Ỷ|Ỹ/g, "Y");
+  str = str.replace(/Đ/g, "D");
+  return str.replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+function extractTransferRemark_(bankText) {
+  if (!bankText) return "";
+  let text = removeVietnameseTones_(bankText);
+  
+  // 1. Cắt bỏ tiền tố hệ thống ngân hàng (VPBank, Napas, Trace, STK, Lời nhắn...)
+  // Nếu có chữ "ND:" hoặc "ND QR" hoặc "NOI DUNG" hoặc "LOI NHAN" -> Lấy phần nội dung thực sự phía sau
+  const ndIndex = text.search(/\b(?:ND|NOI DUNG|ND QR|NOI DUNG QR|LOI NHAN|MESSAGE)[\s:_-]+/i);
+  if (ndIndex !== -1) {
+    text = text.substring(ndIndex).replace(/^(?:ND|NOI DUNG|ND QR|NOI DUNG QR|LOI NHAN|MESSAGE)[\s:_-]+/i, "");
+  } else {
+    // Nếu không có tiền tố rõ ràng -> xóa các từ khóa hệ thống ngân hàng
+    text = text.replace(/\b(?:VPBANK|VPB|TECHCOMBANK|TCB|VIETCOMBANK|VCB|MBBANK|MBVCB|BIDV|AGRIBANK|ACB|TPB|NAPAS|TRACE|EBANK|IB\w+|FT\w+|STK|NHAN TU|NHAN TIEN)\b[\s\d]*/gi, " ");
+  }
+
+  // 2. Cắt bỏ tiền tố nhận diện phụ ở đầu (FB, FACEBOOK, ACC, TK, NICK...)
+  text = text.replace(/^(?:FB|FACEBOOK|ACC|TK|NICK|QR)\s+/i, "");
+
+  // 3. Cắt bỏ hậu tố phụ trợ ở đuôi (CHUYEN TIEN, CHUYEN KHOAN, CHUYEN, CK, THANH TOAN, TT...)
+  text = text.replace(/(?:\s+(?:CHUYEN TIEN|CHUYEN KHOAN|CHUYEN|CK|THANH TOAN|TT|MUA|XEM QUE|XEM|QUE|KINH DICH|TU VI))+\s*$/i, "");
+
+  // 4. Làm sạch khoảng trắng thừa và ký tự đặc biệt
+  text = text.replace(/[^A-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  return text;
+}
+
+function findPendingCustomerByName_(bankText) {
+  const ss = getSpreadsheet_();
+  if (!ss) return null;
+  const sheet = ss.getSheetByName("Transfers");
+  if (!sheet) return null;
+
+  // Trích xuất nội dung thuần của người chuyển khoản (đã lọc sạch rác ngân hàng)
+  const cleanRemark = extractTransferRemark_(bankText);
+  const compactRemark = cleanRemark.replace(/\s+/g, "");
+  
+  // Yêu cầu nội dung CK:
+  // 1. Có từ 2 từ trở lên (mỗi từ >= 2 ký tự), HOẶC
+  // 2. Viết liền 1 từ NHƯNG độ dài >= 5 ký tự (khách viết liền cả họ và tên như "phamquantran", "nguyenoanh", "manche")
+  // Tránh trường hợp chỉ có 1 từ ngắn đơn lẻ (VD: "HIEN", "AN", "HA" < 5 ký tự) gây khớp nhầm
+  const remarkWords = cleanRemark.split(/\s+/).filter(w => w.length >= 2);
+  if (remarkWords.length < 2 && compactRemark.length < 5) {
+    Logger.log("🛑 Nội dung CK quá ngắn hoặc chỉ có 1 từ đơn lẻ ('" + cleanRemark + "') -> Không đủ cơ sở định danh an toàn. BỎ QUA để tránh tạo nhầm.");
+    return null;
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const pendingCandidates = [];
+  const orderedCandidates = [];
+
+  for (let i = data.length - 1; i >= 1; i--) {
+    const custName = String(data[i][4] || "").trim();
+    const status = String(data[i][5] || "").trim().toUpperCase();
+    if (custName) {
+      const cleanName = removeVietnameseTones_(custName);
+      const candWords = cleanName.split(/\s+/).filter(w => w.length >= 2);
+      // Bắt buộc tên khách FB cũng phải có ít nhất 2 từ (độ dài >= 4) để đủ cơ sở định danh
+      if (candWords.length >= 2 && cleanName.length >= 4) {
+        const reversedWords = candWords.slice().reverse();
+        const item = {
+          rowNumber: i + 1,
+          convId: data[i][1],
+          pageId: data[i][2],
+          fbPageId: data[i][3],
+          customerName: custName,
+          cleanName: cleanName,
+          candWords: candWords,
+          reversedWords: reversedWords,
+          compactName: cleanName.replace(/\s+/g, ""),
+          compactReversed: reversedWords.join(""),
+          tagTime: data[i][8] || "",
+          status: status
+        };
+        if (status === "PENDING") {
+          pendingCandidates.push(item);
+        } else {
+          orderedCandidates.push(item);
+        }
+      }
+    }
+  }
+
+  function matchCandidateStrict_(list) {
+    if (list.length === 0) return null;
+
+    let bestCand = null;
+    let bestScore = 0;
+    let bestMatchType = "";
+
+    for (let c = 0; c < list.length; c++) {
+      const cand = list[c];
+      let candScore = 0;
+      let matchType = "";
+
+      const normalWords = cand.candWords;
+      const reversedWords = cand.reversedWords;
+      const reversedCleanName = reversedWords.join(" ");
+
+      // QUY TẮC 1: Khớp NGUYÊN CỤM TÊN liên tiếp (Thuận hoặc Đảo kiểu Tây/Việt)
+      // Ví dụ: FB là "Nguyễn Mai Vương" hoặc "Se Rena" -> Tìm đúng cụm "NGUYEN MAI VUONG" hoặc "SE RENA"
+      const exactPatternNormal = new RegExp("(?:^|[^A-Z0-9])" + escapeRegex_(cand.cleanName) + "(?:$|[^A-Z0-9])");
+      const exactPatternRev = new RegExp("(?:^|[^A-Z0-9])" + escapeRegex_(reversedCleanName) + "(?:$|[^A-Z0-9])");
+
+      if (exactPatternNormal.test(" " + cleanRemark + " ")) {
+        candScore = 100 + normalWords.length * 10;
+        matchType = "Khớp nguyên cụm tên ('" + cand.cleanName + "')";
+      } else if (exactPatternRev.test(" " + cleanRemark + " ")) {
+        candScore = 98 + normalWords.length * 10;
+        matchType = "Khớp nguyên cụm tên đảo ('" + reversedCleanName + "')";
+      }
+      // QUY TẮC 2: Khớp dính liền không dấu toàn bộ Họ và Tên (Hỗ trợ cả tên dính liền như Thuytrang Nguyen <-> THUY TRANG NGUYEN)
+      // Ví dụ: FB "Thuytrang Nguyen" (THUYTRANGNGUYEN) khớp hoàn hảo với CK "THUY TRANG NGUYEN" (THUYTRANGNGUYEN)
+      else if (cand.compactName.length >= 5 && (compactRemark.includes(cand.compactName) || (cand.compactReversed && compactRemark.includes(cand.compactReversed)))) {
+        candScore = 90 + cand.compactName.length;
+        matchType = "Khớp viết liền toàn bộ Họ & Tên ('" + cand.compactName + "')";
+      }
+      // QUY TẮC 3: Khớp đảo Họ - Tên LIỀN KỀ (Chỉ cho phép 2 từ đứng sát nhau)
+      // Ví dụ: FB là "Tha Bùi" -> trong nội dung phải có cụm "BUI THA" đứng sát nhau
+      else if (normalWords.length === 2) {
+        const revPhrase = normalWords[1] + " " + normalWords[0]; // "BUI" + " " + "THA"
+        const revPattern = new RegExp("(?:^|[^A-Z0-9])" + escapeRegex_(revPhrase) + "(?:$|[^A-Z0-9])");
+        if (revPattern.test(" " + cleanRemark + " ")) {
+          candScore = 95;
+          matchType = "Khớp đảo Họ-Tên liền kề ('" + revPhrase + "')";
+        }
+      }
+
+      // QUY TẮC 4: Khớp Họ & Tên chính theo thứ tự (cho phép thêm 1-2 tên đệm ở giữa)
+      // Tự động kiểm tra cả chiều Việt (Nguyễn Hồng Nhung) lẫn chiều Tây (Trang Thu Nguyễn / Nhan Dinh)
+      // Bắt buộc: Từ ĐẦU TIÊN (Họ) và từ CUỐI CÙNG (Tên chính) phải khớp đúng tuyệt đối
+      if (candScore === 0 || candScore < 100) {
+        const testWordVariants = [normalWords, reversedWords];
+        for (let v = 0; v < testWordVariants.length; v++) {
+          const fbWords = testWordVariants[v];
+          const ckWords = remarkWords;
+          const extraWords = ckWords.length - fbWords.length;
+          
+          if (extraWords >= 1 && extraWords <= 2) {
+            const sameFirst = (fbWords[0] === ckWords[0]);
+            const sameLast = (fbWords[fbWords.length - 1] === ckWords[ckWords.length - 1]);
+            
+            if (sameFirst && sameLast) {
+              let ckIdx = 0;
+              let matchedCount = 0;
+              for (let f = 0; f < fbWords.length; f++) {
+                while (ckIdx < ckWords.length) {
+                  if (ckWords[ckIdx] === fbWords[f]) {
+                    matchedCount++;
+                    ckIdx++;
+                    break;
+                  }
+                  ckIdx++;
+                }
+              }
+              if (matchedCount === fbWords.length) {
+                // Điểm = 80 + số từ khớp * 15 (Người khớp 3 từ như Nguyễn Hồng Nhung = 125 điểm > người chỉ khớp 2 từ như Hồng Nhung = 120 điểm)
+                const score = 80 + matchedCount * 15;
+                if (score > candScore) {
+                  candScore = score;
+                  matchType = "Khớp Họ & Tên chính theo thứ tự ('" + fbWords.join(" ") + "' trong '" + cleanRemark + "')";
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Lưu lại ứng viên có điểm số cao nhất
+      if (candScore > bestScore) {
+        bestScore = candScore;
+        bestCand = cand;
+        bestMatchType = matchType;
+      }
+    }
+
+    if (bestCand && bestScore > 0) {
+      Logger.log("✅ " + bestMatchType + " (Điểm: " + bestScore + ") -> Khách: '" + bestCand.customerName + "' (Dòng " + bestCand.rowNumber + ")");
+      return bestCand;
+    }
+
+    return null;
+  }
+
+  // 1. Ưu tiên tìm trong nhóm PENDING (khách vừa gắn nhãn)
+  const matchedPending = matchCandidateStrict_(pendingCandidates);
+  if (matchedPending) {
+    Logger.log("🎯 Khớp chính xác khách PENDING: '" + matchedPending.customerName + "' (Dòng " + matchedPending.rowNumber + ")");
+    return matchedPending;
+  }
+
+  // 2. Tìm trong nhóm khách cũ ORDERED (khách quen tự chuyển khoản lại)
+  const matchedOrdered = matchCandidateStrict_(orderedCandidates);
+  if (matchedOrdered) {
+    Logger.log("🎯 Khớp chính xác khách quen chuyển khoản lại: '" + matchedOrdered.customerName + "' (Dòng " + matchedOrdered.rowNumber + ")");
+    return matchedOrdered;
+  }
+
+  Logger.log("🛑 Không khớp được khách nào với nội dung sau khi lọc: '" + cleanRemark + "' (Thà bỏ qua để an toàn)");
+  return null;
+}
+
+function escapeRegex_(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getSpreadsheet_() {
+  try {
+    const active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active;
+  } catch (e) {}
+
+  try {
+    if (CONFIG.spreadsheetId && !CONFIG.spreadsheetId.includes("DIEN_ID")) {
+      return SpreadsheetApp.openById(CONFIG.spreadsheetId);
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+function registerPendingTransfer_(data) {
+  const ss = getSpreadsheet_();
+  if (!ss) return;
+  const sheet = ss.getSheetByName("Transfers");
+  if (!sheet) return;
+
+  const rows = sheet.getDataRange().getValues();
+  let foundRow = -1;
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][1]).trim() === String(data.convId).trim()) {
+      foundRow = i + 1;
+      break;
+    }
+  }
+
+  const nowStr = new Date().toLocaleString("vi-VN");
+
+  if (foundRow > 0) {
+    sheet.getRange(foundRow, 3).setValue(data.pageId);
+    sheet.getRange(foundRow, 4).setValue(data.fbPageId || "");
+    sheet.getRange(foundRow, 5).setValue(data.customerName || "Khách Hàng");
+    sheet.getRange(foundRow, 6).setValue("PENDING");
+    sheet.getRange(foundRow, 9).setValue(nowStr);
+    Logger.log("✅ Đã cập nhật dòng " + foundRow + " cho khách: " + data.customerName);
+  } else {
+    sheet.appendRow([
+      rows.length, // STT
+      data.convId,
+      data.pageId,
+      data.fbPageId || "",
+      data.customerName || "Khách Hàng",
+      "PENDING",
+      "",
+      "",
+      nowStr,
+      ""
+    ]);
+    Logger.log("✅ Đã thêm mới dòng cho khách: " + data.customerName);
+  }
+}
+
+function findPendingRecordByConvId_(convId) {
+  const ss = getSpreadsheet_();
+  if (!ss) return null;
+  const sheet = ss.getSheetByName("Transfers");
+  if (!sheet) return null;
+
+  const data = sheet.getDataRange().getValues();
+  for (let i = data.length - 1; i >= 1; i--) {
+    const rowConvId = String(data[i][1]).trim();
+    const status = String(data[i][5]).trim().toUpperCase();
+    if (rowConvId === convId && status === "PENDING") {
+      return { rowNumber: i + 1, convId: data[i][1] };
+    }
+  }
+  return null;
+}
+
+function updateTransferRecordStatus_(rowNumber, status, amount, orderId) {
+  const ss = getSpreadsheet_();
+  if (!ss) return;
+  const sheet = ss.getSheetByName("Transfers");
+  if (!sheet) return;
+
+  const currentAmount = String(sheet.getRange(rowNumber, 7).getValue() || "").trim();
+  const currentOrderId = String(sheet.getRange(rowNumber, 8).getValue() || "").trim();
+  const currentOrderTime = String(sheet.getRange(rowNumber, 10).getValue() || "").trim();
+
+  const newAmount = currentAmount ? (currentAmount + " | " + amount) : amount;
+  const newOrderId = currentOrderId ? (currentOrderId + ", " + orderId) : orderId;
+  const newTime = currentOrderTime ? (currentOrderTime + " | " + new Date().toLocaleString("vi-VN")) : new Date().toLocaleString("vi-VN");
+
+  sheet.getRange(rowNumber, 6).setValue(status);
+  sheet.getRange(rowNumber, 7).setValue(newAmount);
+  sheet.getRange(rowNumber, 8).setValue(newOrderId);
+  sheet.getRange(rowNumber, 10).setValue(newTime);
+}
+
+function getSapoToken_() {
+  const store = PropertiesService.getScriptProperties();
+  let token = store.getProperty(STORE_KEYS.sapoToken);
+  if (token) return token;
+
+  const ss = getSpreadsheet_();
+  if (ss) {
+    const configSheet = ss.getSheetByName("Config");
+    if (configSheet) {
+      const data = configSheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][0] === "sapo_token" && data[i][1]) {
+          return String(data[i][1]).trim();
+        }
+      }
+    }
+  }
+  return "";
+}
+
+function saveSapoToken_(token) {
+  if (!token) return;
+  PropertiesService.getScriptProperties().setProperty(STORE_KEYS.sapoToken, token);
+  
+  const ss = getSpreadsheet_();
+  if (ss) {
+    const configSheet = ss.getSheetByName("Config");
+    if (configSheet) {
+      const data = configSheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][0] === "sapo_token") {
+          configSheet.getRange(i + 1, 2).setValue(token);
+          configSheet.getRange(i + 1, 3).setValue(new Date().toLocaleString("vi-VN"));
+          return;
+        }
+      }
+    }
+  }
+}
+
+// ============================================
+// 8. THÔNG BÁO ZALO BOT & TIỆN ÍCH
+// ============================================
+function sendFundNotification_(newEntries) {
+  if (!CONFIG.zaloChatId || newEntries.length === 0) return;
+
+  const lines = newEntries.slice().reverse().map(function (e) {
+    const icon = e.sign === "+" ? "🟢" : "🔴";
+    let textBlock = icon + " " + e.sign + e.amount;
+    
+    // Nếu là giao dịch thuộc diện quét tạo đơn (20k, 50k, 500k)
+    if (e.orderStatus && e.orderStatus.isAutoScan) {
+      if (e.orderStatus.success && e.orderStatus.customerName) {
+        textBlock += "\n✅ " + e.orderStatus.customerName;
+      } else {
+        textBlock += "\n❌ Chưa tạo";
+      }
+    }
+
+    textBlock += "\n💰 Số dư: " + formatCurrency_(e.balanceAfter) + "đ\n" +
+                 "⏰ Thời gian: " + e.dateText + "\n" +
+                 "📝 Nội dung: " + e.name;
+    return textBlock;
+  });
+
+  var text = lines.join("\n\n------------------\n\n");
+  sendZaloMessage_(CONFIG.zaloBotToken, CONFIG.zaloChatId, text);
+}
+
+function sendZaloMessage_(token, chatId, text) {
+  var url = "https://bot-api.zaloplatforms.com/bot" + token + "/sendMessage";
+  var payload = { "chat_id": String(chatId), "text": text };
+
+  var response = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  
+  if (response.getResponseCode() >= 300) {
+    Logger.log("Lỗi Zalo: " + response.getContentText());
+  }
+}
+
+// Webhook xử lý cả Zalo Webhook lẫn Token Sync từ Extension
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) return ContentService.createTextOutput("No data");
+    
+    let data = {};
+    try { data = JSON.parse(e.postData.contents); } catch(err) {}
+
+    // 1. Nếu là lệnh từ Extension (Đồng bộ Token Sapo)
+    if (data.action === "sync_token" && data.token) {
+      saveSapoToken_(data.token);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: "Token updated" })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 1b. Đồng bộ Page IDs từ Extension
+    if (data.action === "sync_pages" && Array.isArray(data.page_ids)) {
+      const store = PropertiesService.getScriptProperties();
+      let pids = JSON.parse(store.getProperty("SAPO_PAGE_IDS") || "[]");
+      data.page_ids.forEach(function(pid) {
+        if (pid && !pids.includes(pid)) pids.push(pid);
+      });
+      store.setProperty("SAPO_PAGE_IDS", JSON.stringify(pids));
+      Logger.log("✅ Đã lưu " + pids.length + " Page IDs từ Extension: " + pids.join(", "));
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: pids.length })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 2. Nếu là Webhook từ Zalo Bot
+    var userId = "";
+    if (data.message && data.message.chat && data.message.chat.id) {
+      userId = String(data.message.chat.id);
+    } else if (data.sender && data.sender.id) {
+      userId = String(data.sender.id);
+    }
+    
+    if (userId !== "") {
+      sendZaloMessage_(CONFIG.zaloBotToken, userId, "✅ Chat ID của bạn là: " + userId + "\n\nHãy copy dãy số này và dán vào phần zaloChatId ở dòng 23 trong code nhé!");
+    }
+    
+    return ContentService.createTextOutput("ok");
+  } catch(err) {
+    return ContentService.createTextOutput("error: " + err.message);
+  }
+}
+
+function doGet(e) {
+  const token = e?.parameter?.token;
+  if (token) saveSapoToken_(token);
+  return ContentService.createTextOutput(JSON.stringify({ success: true, message: "Server is online" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function setZaloWebhook() {
+  var webAppUrl = "https://script.google.com/macros/s/AKfycbz5DPNOoYN3w3X5ppE_DKF4zf3O3Pw7YDg10rfS18qtoQ7wIE7jtJewJ9X3rRfZ5B83/exec"; 
+  var url = 'https://bot-api.zaloplatforms.com/bot' + CONFIG.zaloBotToken + '/setWebhook?url=' + encodeURIComponent(webAppUrl);
+  var response = UrlFetchApp.fetch(url);
+  Logger.log("Kết quả set Webhook: " + response.getContentText());
+}
+
+// ----------------------------------
+// TIỆN ÍCH VPBANK
+// ----------------------------------
+function fetchVPBankEntries_() {
+  if (!CONFIG.vpbankUrl) return [];
+
+  const response = UrlFetchApp.fetch(CONFIG.vpbankUrl, {
+    method: "get",
+    headers: {
+      "accept": "application/json",
+      "authkey": CONFIG.vpbankAuthKey,
+      "cookie": CONFIG.vpbankCookie,
+      "accountnumber": CONFIG.vpbankAccountNumber,
+      "keyshare": CONFIG.vpbankKeyshare,
+      "pinshare": CONFIG.vpbankPinshare,
+      "referer": "https://neo.vpbank.com.vn/notification-list.html",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "x-requested-with": "XMLHttpRequest"
+    },
+    muteHttpExceptions: true
+  });
+
+  if (response.getResponseCode() >= 300) {
+    throw new Error("VPBank HTTP " + response.getResponseCode());
+  }
+
+  const json = JSON.parse(response.getContentText());
+  if (!json || !json.d || !json.d.Message) return [];
+
+  const messageObj = JSON.parse(json.d.Message);
+  const accountKey = Object.keys(messageObj)[0];
+  if (!accountKey) return [];
+
+  const rawEntries = messageObj[accountKey];
+  const entries = [];
+
+  for (let i = 0; i < rawEntries.length; i++) {
+    const parts = rawEntries[i].split("|");
+    if (parts.length >= 5) {
+      const datePart = parts[0].replace("VPB:", "").trim();
+      let changeStr = parts[2].replace("VND", "").replace(/,/g, "").trim();
+      let sign = "+";
+      if (changeStr.indexOf("-") === 0) {
+        sign = "-";
+        changeStr = changeStr.substring(1);
+      }
+      
+      let amountFormatted = changeStr.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      const desc = parts[4].trim();
+
+      entries.push({
+        source: "VPBank",
+        sign: sign,
+        amount: amountFormatted + "đ",
+        amountValue: parseFloat(changeStr),
+        name: desc,
+        dateText: datePart
+      });
+    }
+  }
+  return entries;
+}
+
+function getNewEntries_(entries, previousTopEntryKey) {
+  if (!previousTopEntryKey) return entries; 
+  const newEntries = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    if (buildEntryKey_(entries[i]) === previousTopEntryKey) break;
+    newEntries.push(entries[i]);
+  }
+  return newEntries;
+}
+
+function buildDigest_(entries) {
+  var payload = entries.map(buildEntryKey_).join("\n");
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, payload);
+  return Utilities.base64EncodeWebSafe(digest);
+}
+
+function buildEntryKey_(entry) {
+  return [entry.sign, entry.amount, entry.name, entry.dateText].join("|");
+}
+
+function formatCurrency_(amount) {
+  if (isNaN(amount)) return "0";
+  return amount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+function sendTestNotification() {
+  sendZaloMessage_(CONFIG.zaloBotToken, CONFIG.zaloChatId, "✅ +1.000đ từ Nạp Test [01/04/2026 15:11]");
+}
+
+function clearStoredState() {
+  PropertiesService.getScriptProperties().deleteAllProperties();
+  Logger.log("Đã xóa lịch sử.");
+}
+
+function setInitialBalance() {
+  const initial = 2529139;
+  PropertiesService.getScriptProperties().setProperty(STORE_KEYS.balance, initial.toString());
+  Logger.log("Đã khởi tạo số dư: " + formatCurrency_(initial) + "đ");
+}
+
+function chotSoNgayBayGio() {
+  const store = PropertiesService.getScriptProperties();
+  const soDuHienTai = 2529139;
+  store.setProperty(STORE_KEYS.balance, soDuHienTai.toString());
+  
+  try {
+    const entries = fetchVPBankEntries_();
+    if (entries && entries.length > 0) {
+      const limitedEntries = entries.slice(0, CONFIG.digestEntryLimit);
+      store.setProperty(STORE_KEYS.lastDigest, buildDigest_(limitedEntries));
+      store.setProperty(STORE_KEYS.lastTopEntryKey, buildEntryKey_(limitedEntries[0]));
+      Logger.log("CHỐT SỔ THÀNH CÔNG! Số dư đã set về: " + formatCurrency_(soDuHienTai) + "đ.");
+    }
+  } catch (e) {
+    Logger.log("Lỗi khi chốt sổ: " + e.message);
+  }
+}
