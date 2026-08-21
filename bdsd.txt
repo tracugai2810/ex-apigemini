@@ -39,6 +39,7 @@ const CONFIG = {
   ],
   locationId: 885876,
   tagIdBangGia: "696219a92feb720001b8e624", // Tag "Gửi bảng giá"
+  tagIdDaThanhToan: "6a87fe78314f04000121a29c", // Tag "Đã thanh toán" màu vàng
 
   // Danh mục sản phẩm tạo đơn Sapo
   products: {
@@ -380,6 +381,25 @@ function createSapoOrder_(params) {
       muteHttpExceptions: true
     });
   } catch (errFulfill) {}
+
+  // BƯỚC 4: Tự động gắn nhãn "Đã thanh toán" (màu vàng) cho đúng hội thoại vừa tạo đơn
+  try {
+    const step4Url = "https://sapo-socials.sapoapps.vn/api/conversations/" + conversationId + "/tags?language=vi";
+    const step4Payload = {
+      tag_id: CONFIG.tagIdDaThanhToan || "6a87fe78314f04000121a29c",
+      page_id: pageId
+    };
+
+    UrlFetchApp.fetch(step4Url, {
+      method: "post",
+      headers: baseHeaders,
+      payload: JSON.stringify(step4Payload),
+      muteHttpExceptions: true
+    });
+    Logger.log("🏷️ Đã tự động gắn nhãn 'Đã thanh toán' cho hội thoại: " + conversationId);
+  } catch (errTag) {
+    Logger.log("⚠️ Lỗi gắn nhãn (không ảnh hưởng đơn): " + errTag.message);
+  }
 
   return {
     success: true,
@@ -953,7 +973,7 @@ function sendFundNotification_(newEntries) {
       if (e.orderStatus.success && e.orderStatus.customerName) {
         textBlock += "\n✅ " + e.orderStatus.customerName;
       } else {
-        textBlock += "\n❌ Chưa tạo đơn";
+        textBlock += "\n❌ Chưa tạo";
       }
     }
 
