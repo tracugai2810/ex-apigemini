@@ -39,10 +39,7 @@ const CONFIG = {
   ],
   locationId: 885876,
   tagIdBangGia: "696219a92feb720001b8e624", // Tag "Gửi bảng giá"
-<<<<<<< HEAD
   tagIdDaThanhToan: "6a87fe78314f04000121a29c", // Tag "Đã thanh toán" màu vàng
-=======
->>>>>>> d7e86f61568b445c6404c797b87d2378dc526eef
 
   // Danh mục sản phẩm tạo đơn Sapo
   products: {
@@ -385,7 +382,6 @@ function createSapoOrder_(params) {
     });
   } catch (errFulfill) {}
 
-<<<<<<< HEAD
   // BƯỚC 4: Tự động gắn nhãn "Đã thanh toán" (màu vàng) cho đúng hội thoại vừa tạo đơn
   try {
     const step4Url = "https://sapo-socials.sapoapps.vn/api/conversations/" + conversationId + "/tags?language=vi";
@@ -405,8 +401,6 @@ function createSapoOrder_(params) {
     Logger.log("⚠️ Lỗi gắn nhãn (không ảnh hưởng đơn): " + errTag.message);
   }
 
-=======
->>>>>>> d7e86f61568b445c6404c797b87d2378dc526eef
   return {
     success: true,
     orderId: orderId,
@@ -979,11 +973,7 @@ function sendFundNotification_(newEntries) {
       if (e.orderStatus.success && e.orderStatus.customerName) {
         textBlock += "\n✅ " + e.orderStatus.customerName;
       } else {
-<<<<<<< HEAD
         textBlock += "\n❌ Chưa tạo";
-=======
-        textBlock += "\n❌ Chưa tạo đơn";
->>>>>>> d7e86f61568b445c6404c797b87d2378dc526eef
       }
     }
 
@@ -1168,22 +1158,14 @@ function clearStoredState() {
 }
 
 function setInitialBalance() {
-<<<<<<< HEAD
   const initial = 2529139;
-=======
-  const initial = 22814261;
->>>>>>> d7e86f61568b445c6404c797b87d2378dc526eef
   PropertiesService.getScriptProperties().setProperty(STORE_KEYS.balance, initial.toString());
   Logger.log("Đã khởi tạo số dư: " + formatCurrency_(initial) + "đ");
 }
 
 function chotSoNgayBayGio() {
   const store = PropertiesService.getScriptProperties();
-<<<<<<< HEAD
   const soDuHienTai = 2529139;
-=======
-  const soDuHienTai = 22814261;
->>>>>>> d7e86f61568b445c6404c797b87d2378dc526eef
   store.setProperty(STORE_KEYS.balance, soDuHienTai.toString());
   
   try {
