@@ -698,12 +698,15 @@ function findPendingCustomerByName_(bankText) {
   const cleanRemark = extractTransferRemark_(bankText);
   const compactRemark = cleanRemark.replace(/\s+/g, "");
   
+  // Tách tất cả các từ và lọc ra danh sách từ thuần chữ cái (loại bỏ mã số giao dịch/mã tham chiếu ngân hàng ở đầu)
+  const remarkWords = cleanRemark.split(/\s+/).filter(w => w.length >= 2);
+  const nameWords = remarkWords.filter(w => /^[A-Z]+$/.test(w));
+  
   // Yêu cầu nội dung CK:
-  // 1. Có từ 2 từ trở lên (mỗi từ >= 2 ký tự), HOẶC
+  // 1. Có từ 2 từ tên thuần chữ trở lên (mỗi từ >= 2 ký tự), HOẶC
   // 2. Viết liền 1 từ NHƯNG độ dài >= 5 ký tự (khách viết liền cả họ và tên như "phamquantran", "nguyenoanh", "manche")
   // Tránh trường hợp chỉ có 1 từ ngắn đơn lẻ (VD: "HIEN", "AN", "HA" < 5 ký tự) gây khớp nhầm
-  const remarkWords = cleanRemark.split(/\s+/).filter(w => w.length >= 2);
-  if (remarkWords.length < 2 && compactRemark.length < 5) {
+  if (nameWords.length < 2 && compactRemark.length < 5) {
     Logger.log("🛑 Nội dung CK quá ngắn hoặc chỉ có 1 từ đơn lẻ ('" + cleanRemark + "') -> Không đủ cơ sở định danh an toàn. BỎ QUA để tránh tạo nhầm.");
     return null;
   }
@@ -791,12 +794,13 @@ function findPendingCustomerByName_(bankText) {
 
       // QUY TẮC 4: Khớp Họ & Tên chính theo thứ tự (cho phép thêm 1-2 tên đệm ở giữa)
       // Tự động kiểm tra cả chiều Việt (Nguyễn Hồng Nhung) lẫn chiều Tây (Trang Thu Nguyễn / Nhan Dinh)
+      // Sử dụng nameWords (danh sách từ thuần chữ cái) để không bị lệch bởi mã số giao dịch ngân hàng ở đầu
       // Bắt buộc: Từ ĐẦU TIÊN (Họ) và từ CUỐI CÙNG (Tên chính) phải khớp đúng tuyệt đối
       if (candScore === 0 || candScore < 100) {
         const testWordVariants = [normalWords, reversedWords];
         for (let v = 0; v < testWordVariants.length; v++) {
           const fbWords = testWordVariants[v];
-          const ckWords = remarkWords;
+          const ckWords = nameWords;
           const extraWords = ckWords.length - fbWords.length;
           
           if (extraWords >= 1 && extraWords <= 2) {
