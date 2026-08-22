@@ -169,15 +169,17 @@ function processSource_(entries, store, sourceKey) {
       return e;
     });
 
-    // 1. XỬ LÝ TỰ ĐỘNG TẠO ĐƠN SAPO NẾU LÀ TIỀN VÀO HỢP LỆ (20k, 50k, 500k) TRƯỚC KHI GỬI ZALO
-    const validAmounts = [20000, 50000, 500000];
+    // 1. XỬ LÝ TỰ ĐỘNG TẠO ĐƠN SAPO NẾU LÀ TIỀN VÀO HỢP LỆ (BỘI SỐ CỦA 20k, 50k, 500k) TRƯỚC KHI GỬI ZALO
     newEntries.forEach(function(entry) {
-      if (entry.sign === "+" && validAmounts.includes(entry.amountValue)) {
-        const orderResult = processAutoOrderForEntry_(entry);
-        if (orderResult && orderResult.success) {
-          entry.orderStatus = { isAutoScan: true, success: true, customerName: orderResult.customerName };
-        } else {
-          entry.orderStatus = { isAutoScan: true, success: false };
+      if (entry.sign === "+") {
+        const pkgInfo = resolvePackageAndQuantity_(entry.amountValue);
+        if (pkgInfo !== null) {
+          const orderResult = processAutoOrderForEntry_(entry);
+          if (orderResult && orderResult.success) {
+            entry.orderStatus = { isAutoScan: true, success: true, customerName: orderResult.customerName };
+          } else {
+            entry.orderStatus = { isAutoScan: true, success: false };
+          }
         }
       }
     });
@@ -189,6 +191,43 @@ function processSource_(entries, store, sourceKey) {
 
   store.setProperty(digestKey, currentDigest);
   store.setProperty(topEntryKeyKey, currentTopKey);
+}
+
+// ----------------------------------
+// NHẬN DIỆN GÓI SẢN PHẨM & SỐ LƯỢNG THEO SỐ TIỀN
+// ----------------------------------
+function resolvePackageAndQuantity_(amount) {
+  if (!amount || amount <= 0) return null;
+
+  // Ưu tiên 1: Chia hết cho 500.000đ (VD: 500k -> 1 gói 500k, 1000k -> 2 gói 500k)
+  if (amount >= 500000 && amount % 500000 === 0 && CONFIG.products[500000]) {
+    return {
+      product: CONFIG.products[500000],
+      quantity: Math.floor(amount / 500000),
+      unitPrice: 500000
+    };
+  }
+
+  // Ưu tiên 2: Chia hết cho 50.000đ (VD: 50k -> 1 gói 50k, 100k -> 2 gói 50k, 150k -> 3 gói 50k)
+  if (amount >= 50000 && amount % 50000 === 0 && CONFIG.products[50000]) {
+    return {
+      product: CONFIG.products[50000],
+      quantity: Math.floor(amount / 50000),
+      unitPrice: 50000
+    };
+  }
+
+  // Ưu tiên 3: Chia hết cho 20.000đ (VD: 20k -> 1 gói 20k, 40k -> 2 gói 20k, 60k -> 3 gói 20k)
+  if (amount >= 20000 && amount % 20000 === 0 && CONFIG.products[20000]) {
+    return {
+      product: CONFIG.products[20000],
+      quantity: Math.floor(amount / 20000),
+      unitPrice: 20000
+    };
+  }
+
+  // Không chia hết (VD: 70k, 110k, 130k...) -> Bỏ qua an toàn
+  return null;
 }
 
 // ----------------------------------
@@ -211,7 +250,7 @@ function processAutoOrderForEntry_(entry) {
   }
 
   try {
-    Logger.log("🛒 Tạo đơn Sapo cho khách: " + record.customerName + " (Gói: " + entry.amountValue + "đ, Page: " + record.pageId + ")");
+    Logger.log("🛒 Tạo đơn Sapo cho khách: " + record.customerName + " (Số tiền: " + entry.amountValue + "đ, Page: " + record.pageId + ")");
     const orderResult = createSapoOrder_({
       conversationId: record.convId,
       pageId: record.pageId,
@@ -241,10 +280,11 @@ function processAutoOrderForEntry_(entry) {
 // ============================================
 function createSapoOrder_(params) {
   const { conversationId, pageId, fbPageId, customerName, amount, token, tenant } = params;
-  const product = CONFIG.products[amount];
-  if (!product) {
-    return { success: false, error: "Không tìm thấy gói sản phẩm cho số tiền: " + amount };
+  const pkgInfo = resolvePackageAndQuantity_(amount);
+  if (!pkgInfo) {
+    return { success: false, error: "Số tiền " + amount + " không chia hết cho các gói chuẩn (20k, 50k, 500k)" };
   }
+  const { product, quantity, unitPrice } = pkgInfo;
 
   const useTenant = tenant || CONFIG.sapoTenant;
   const baseHeaders = {
@@ -295,6 +335,8 @@ function createSapoOrder_(params) {
   // BƯỚC 2: Chốt đơn với sản phẩm (KHỚP EXTENSION — shipping_address: null, billing_address: null, payment_details)
   const step2Url = "https://sapo-socials.sapoapps.vn/api/checkouts/" + checkoutToken + "/complete?conversation_id=" + encodeURIComponent(conversationId) + "&page_id=" + encodeURIComponent(pageId) + "&language=vi";
 
+  const noteTitle = (quantity > 1 ? (quantity + "x ") : "") + product.title;
+
   const step2CheckoutObj = {
     buyer_accepts_marketing: false,
     requires_shipping_method: false,
@@ -308,7 +350,7 @@ function createSapoOrder_(params) {
     inventory_behaviour: "decrement_obeying_policy_in_specify_location",
     location_id: CONFIG.locationId,
     name: customerName || "Khách",
-    note: "Đơn tự động chuyển khoản VPBank (" + product.title + ")",
+    note: "Đơn tự động chuyển khoản VPBank (" + noteTitle + ")",
     note_attributes: [],
     phone: null,
     requires_email: false,
@@ -326,10 +368,10 @@ function createSapoOrder_(params) {
     line_items: [{
       variant_id: product.variantId,
       custom: false,
-      quantity: 1,
+      quantity: quantity,
       title: product.title,
-      price: amount,
-      price_override: amount,
+      price: unitPrice,
+      price_override: unitPrice,
       requires_shipping: false,
       taxable: false
     }]
