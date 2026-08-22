@@ -775,9 +775,9 @@ function findPendingCustomerByName_(bankText) {
         candScore = 98 + normalWords.length * 10;
         matchType = "Khớp nguyên cụm tên đảo ('" + reversedCleanName + "')";
       }
-      // QUY TẮC 2: Khớp dính liền không dấu toàn bộ Họ và Tên (Hỗ trợ cả tên dính liền như Thuytrang Nguyen <-> THUY TRANG NGUYEN)
-      // Ví dụ: FB "Thuytrang Nguyen" (THUYTRANGNGUYEN) khớp hoàn hảo với CK "THUY TRANG NGUYEN" (THUYTRANGNGUYEN)
-      else if (cand.compactName.length >= 5 && (compactRemark.includes(cand.compactName) || (cand.compactReversed && compactRemark.includes(cand.compactReversed)))) {
+      // QUY TẮC 2: Khớp dính liền không dấu toàn bộ Họ và Tên (So khớp chính xác tuyệt đối, không dùng includes để tránh nhầm chuỗi con)
+      // Ví dụ: FB là "Phương Uyên" -> Khách gõ CK không dấu cách là "phuonguyen" hoặc "uyenphuong"
+      else if (cand.compactName.length >= 5 && (compactRemark === cand.compactName || (cand.compactReversed && compactRemark === cand.compactReversed))) {
         candScore = 90 + cand.compactName.length;
         matchType = "Khớp viết liền toàn bộ Họ & Tên ('" + cand.compactName + "')";
       }
