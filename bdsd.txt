@@ -1158,14 +1158,14 @@ function clearStoredState() {
 }
 
 function setInitialBalance() {
-  const initial = 22814261;
+  const initial = 2529139;
   PropertiesService.getScriptProperties().setProperty(STORE_KEYS.balance, initial.toString());
   Logger.log("Đã khởi tạo số dư: " + formatCurrency_(initial) + "đ");
 }
 
 function chotSoNgayBayGio() {
   const store = PropertiesService.getScriptProperties();
-  const soDuHienTai = 22814261;
+  const soDuHienTai = 2529139;
   store.setProperty(STORE_KEYS.balance, soDuHienTai.toString());
   
   try {
