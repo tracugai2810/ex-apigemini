@@ -33,8 +33,8 @@ const CONFIG = {
   // Cấu hình Sapo
   sapoTenant: "janet.mysapo.net",
   pageIds: [
-    "694cbdb3244df9d04b46c3cf", // Page 1: Shop Trà Củ Gai Chính Hãng
-    "6a2c19eea4970700019c9d55", // Page 2: Xem Kinh Dịch & Tử Vi - Chi 20K
+    "694cbdb3244df9d04b46c3cf", // Page 1: Chi 20K - Xem Kinh Dịch & Tử Vi
+    "694cbdb3244df9d04b46c3d4", // Page 2: Xem Kinh Dịch & Tử Vi - Chi 20K
     "6961e838244df9d04bb4deb0"  // Page 3: Xem Quẻ Kinh Dịch - Chi 20K (Instagram)
   ],
   locationId: 885876,
@@ -502,7 +502,7 @@ function scanMobileTaggedConversations_() {
   // 2. Tự động lấy toàn bộ danh sách Page từ Cấu hình + Bộ nhớ Extension + API Sapo
   let pageIdList = (CONFIG.pageIds && CONFIG.pageIds.length > 0) ? CONFIG.pageIds.slice() : [
     "694cbdb3244df9d04b46c3cf",
-    "6a2c19eea4970700019c9d55",
+    "694cbdb3244df9d04b46c3d4",
     "6961e838244df9d04bb4deb0"
   ];
 
