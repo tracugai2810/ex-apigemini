@@ -499,10 +499,10 @@ function scanMobileTaggedConversations_() {
     }
   } catch(eTags) {}
 
-  // 2. Tự động lấy toàn bộ danh sách Page từ Sapo + Bộ nhớ Extension
-  let pageIdList = [
+  // 2. Tự động lấy toàn bộ danh sách Page từ Cấu hình + Bộ nhớ Extension + API Sapo
+  let pageIdList = (CONFIG.pageIds && CONFIG.pageIds.length > 0) ? CONFIG.pageIds.slice() : [
     "694cbdb3244df9d04b46c3cf",
-    "694cbdb3244df9d04b46c3d4",
+    "6a2c19eea4970700019c9d55",
     "6961e838244df9d04bb4deb0"
   ];
 
@@ -685,6 +685,18 @@ function extractTransferRemark_(bankText) {
 
   // 4. Làm sạch khoảng trắng thừa và ký tự đặc biệt
   text = text.replace(/[^A-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+  // 5. Khử trùng lặp chuỗi nếu ngân hàng gửi tên bị nhân đôi (VD: "NGUYEN THI KIM TRANG NGUYEN THI KIM TRANG")
+  const words = text.split(/\s+/);
+  if (words.length >= 4 && words.length % 2 === 0) {
+    const half = words.length / 2;
+    const firstHalf = words.slice(0, half).join(" ");
+    const secondHalf = words.slice(half).join(" ");
+    if (firstHalf === secondHalf) {
+      text = firstHalf;
+    }
+  }
+
   return text;
 }
 
