@@ -680,8 +680,8 @@ function extractTransferRemark_(bankText) {
   // 2. Cắt bỏ tiền tố nhận diện phụ ở đầu (FB, FACEBOOK, ACC, TK, NICK...)
   text = text.replace(/^(?:FB|FACEBOOK|ACC|TK|NICK|QR)\s+/i, "");
 
-  // 3. Cắt bỏ hậu tố phụ trợ ở đuôi (CHUYEN TIEN, CHUYEN KHOAN, CHUYEN, CK, THANH TOAN, TT...)
-  text = text.replace(/(?:\s+(?:CHUYEN TIEN|CHUYEN KHOAN|CHUYEN|CK|THANH TOAN|TT|MUA|XEM QUE|XEM|QUE|KINH DICH|TU VI))+\s*$/i, "");
+  // 3. Cắt bỏ hậu tố phụ trợ ở đuôi (CHUYEN TIEN, CHUYEN KHOAN, CHUYEN, CK, THANH TOAN, TT, QR...)
+  text = text.replace(/(?:\s+(?:CHUYEN TIEN|CHUYEN KHOAN|CHUYEN|CK|THANH TOAN|TT|MUA|XEM QUE|XEM|QUE|KINH DICH|TU VI|QR))+\s*$/i, "");
 
   // 4. Làm sạch khoảng trắng thừa và ký tự đặc biệt
   text = text.replace(/[^A-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
