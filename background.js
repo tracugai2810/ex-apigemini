@@ -223,13 +223,15 @@ const bgAiService = {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout để Apps Script kịp ghi Sheet
         const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
         clearTimeout(timeoutId);
-        return await res.json();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return data;
       } catch(e) {
-        console.log(`[SA-BG] Lỗi kết nối Google Sheet (lần ${attempt}/2):`, e.message);
-        if (attempt < 2) await new Promise(r => setTimeout(r, 600));
+        console.warn(`[SA-BG] Lỗi kết nối Google Sheet (lần ${attempt}/2):`, e.message);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
       }
     }
     return null;
@@ -256,17 +258,27 @@ const bgAiService = {
   },
 
   async saveSummary(syncSheetUrl, convId, summary, customerName) {
-    if (!syncSheetUrl || !summary) return;
+    if (!syncSheetUrl || !summary) {
+      console.warn('[SA-BG] Bỏ qua lưu tóm tắt: thiếu syncSheetUrl hoặc summary');
+      return false;
+    }
     try {
-      await this.fetchSheet(syncSheetUrl, {
+      const result = await this.fetchSheet(syncSheetUrl, {
         action: 'save',
         convId: convId,
-        customerName: encodeURIComponent(customerName || ''),
-        data: encodeURIComponent(summary)
+        customerName: customerName || '',
+        data: summary
       });
-      console.log('[SA-BG] Đã lưu tóm tắt quẻ cho conversation:', convId);
+      if (result && result.success) {
+        console.log('[SA-BG] ✅ ĐÃ LƯU TÓM TẮT LÊN GOOGLE SHEET THÀNH CÔNG:', convId, customerName);
+        return true;
+      } else {
+        console.error('[SA-BG] ❌ Lỗi lưu Google Sheet:', result ? result.error : 'Không có phản hồi');
+        return false;
+      }
     } catch(e) {
-      console.error('[SA-BG] Lỗi lưu tóm tắt:', e);
+      console.error('[SA-BG] ❌ Ngoại lệ lưu tóm tắt:', e);
+      return false;
     }
   },
 
@@ -379,12 +391,20 @@ const bgAiService = {
       let aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 
       if (aiResult && aiResult.length > 10) {
-        // Tách tóm tắt
-        const summaryMatch = aiResult.match(/\[TÓM[_ ]TẮT\]\s*:?\s*([\s\S]+)$/i);
+        // Tách tóm tắt linh hoạt (chấp nhận cả **, ###, [TÓM TẮT], TÓM TẮT: ...)
+        let summary = "";
+        const summaryMatch = aiResult.match(/(?:^|\n)\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?\s*([\s\S]+)$/i);
         if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
-          const summary = summaryMatch[1].trim();
+          summary = summaryMatch[1].trim();
+          // Xóa phần tóm tắt khỏi nội dung copy trả về cho user
+          aiResult = aiResult.replace(/(?:\n+[-—~*_]*)*\s*(?:\n+\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?[\s\S]*)$/i, '').trim();
+        } else {
+          // Fallback an toàn: Nếu AI không theo đúng format, lấy đoạn đầu bài luận làm tóm tắt để không bao giờ mất ngữ cảnh
+          summary = aiResult.slice(0, 300).replace(/\n+/g, ' ').trim();
+        }
+
+        if (summary) {
           await this.saveSummary(settings.syncSheetUrl, conversationId, summary, customerName);
-          aiResult = aiResult.replace(/\n*[-—~*_]*\s*\n*\[TÓM[_ ]TẮT\]\s*:?[\s\S]*$/i, '').trim();
         }
 
         // Lưu kết quả Claude

@@ -1,0 +1,120 @@
+/**
+ * GOOGLE APPS SCRIPT: ĐỒNG BỘ NGỮ CẢNH EXTENSION (v2.0)
+ * ---------------------------------------------------
+ * - SO KHỚP DUY NHẤT THEO convId (CỘT A).
+ * - TUYỆT ĐỐI KHÔNG SO KHỚP THEO TÊN KHÁCH (Tránh ghi đè khi trùng tên).
+ * - TỰ ĐỘNG LƯU TỐI ĐA 3 QUẺ GẦN NHẤT CHO MỖI CUỘC TRÒ CHUYỆN.
+ * ---------------------------------------------------
+ */
+
+function doGet(e) {
+  try {
+    const action = e?.parameter?.action;
+    const convId = String(e?.parameter?.convId || "").trim();
+    if (!convId || convId === "default") {
+      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [] })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("Ngữ cảnh Extension") || ss.getSheetByName("Ngữ cảnh") || ss.getSheetByName("Context") || ss.getSheets()[0];
+    const data = sheet.getDataRange().getValues();
+
+    // 1. ACTION GET: ĐỌC LỊCH SỬ CHỈ THEO CỘT A (convId)
+    if (action === "get") {
+      for (let i = data.length - 1; i >= 1; i--) {
+        const rowConvId = String(data[i][0] || "").trim();
+        if (rowConvId === convId) {
+          let summaries = [];
+          try {
+            summaries = JSON.parse(data[i][1]);
+            if (!Array.isArray(summaries)) summaries = [{ text: String(data[i][1]), time: data[i][2] }];
+          } catch(err) {
+            if (data[i][1]) summaries = [{ text: String(data[i][1]), time: data[i][2] }];
+          }
+          return ContentService.createTextOutput(JSON.stringify({ success: true, data: summaries })).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [] })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 2. ACTION SAVE: LƯU TÓM TẮT CHỈ THEO CỘT A (convId)
+    if (action === "save") {
+      let customerName = String(e?.parameter?.customerName || "").trim();
+      try {
+        if (customerName.includes("%")) customerName = decodeURIComponent(customerName);
+      } catch(eCust) {}
+
+      let rawData = String(e?.parameter?.data || "").trim();
+      try {
+        if (rawData.includes("%")) rawData = decodeURIComponent(rawData);
+      } catch(eData) {}
+
+      const nowStr = new Date().toLocaleString("vi-VN");
+
+      let foundRow = -1;
+      let existingSummaries = [];
+
+      // QUÉT DUY NHẤT CỘT A (rowConvId === convId)
+      for (let i = 1; i < data.length; i++) {
+        const rowConvId = String(data[i][0] || "").trim();
+        if (rowConvId === convId) {
+          foundRow = i + 1;
+          try {
+            existingSummaries = JSON.parse(data[i][1]);
+            if (!Array.isArray(existingSummaries)) existingSummaries = [{ text: String(data[i][1]), time: data[i][2] }];
+          } catch(err) {
+            if (data[i][1]) existingSummaries = [{ text: String(data[i][1]), time: data[i][2] }];
+          }
+          break;
+        }
+      }
+
+      let newSummaryObj = { text: rawData, time: nowStr };
+      try {
+        const parsed = JSON.parse(rawData);
+        if (Array.isArray(parsed)) {
+          existingSummaries = parsed;
+          newSummaryObj = null;
+        }
+      } catch(eJson) {}
+
+      if (newSummaryObj) {
+        existingSummaries.push(newSummaryObj);
+        if (existingSummaries.length > 3) existingSummaries = existingSummaries.slice(-3);
+      }
+
+      const finalJsonData = JSON.stringify(existingSummaries);
+
+      if (foundRow > 0) {
+        // Cập nhật đúng dòng có convId đó
+        sheet.getRange(foundRow, 1).setValue(convId);
+        sheet.getRange(foundRow, 2).setValue(finalJsonData);
+        sheet.getRange(foundRow, 3).setValue(nowStr);
+        if (customerName) sheet.getRange(foundRow, 4).setValue(customerName);
+      } else {
+        // TẠO DÒNG MỚI HOÀN TOÀN Ở DƯỚI CÙNG
+        sheet.appendRow([
+          convId,
+          finalJsonData,
+          nowStr,
+          customerName || "Khách Hàng"
+        ]);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3. ACTION DELETE: XÓA CHỈ THEO CỘT A (convId)
+    if (action === "delete") {
+      for (let i = data.length - 1; i >= 1; i--) {
+        if (String(data[i][0] || "").trim() === convId) {
+          sheet.deleteRow(i + 1);
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Invalid action" })).setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON);
+  }
+}

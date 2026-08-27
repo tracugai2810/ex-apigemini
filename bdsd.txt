@@ -1160,8 +1160,16 @@ function handleContextSync_(e) {
 
     // 2. ACTION SAVE: LƯU TÓM TẮT CHỈ THEO convId (CỘT A)
     if (action === "save") {
-      const customerName = decodeURIComponent(String(e?.parameter?.customerName || "")).trim();
-      const rawData = decodeURIComponent(String(e?.parameter?.data || "")).trim();
+      let customerName = String(e?.parameter?.customerName || "").trim();
+      try {
+        if (customerName.includes("%")) customerName = decodeURIComponent(customerName);
+      } catch(eCust) {}
+
+      let rawData = String(e?.parameter?.data || "").trim();
+      try {
+        if (rawData.includes("%")) rawData = decodeURIComponent(rawData);
+      } catch(eData) {}
+
       const nowStr = new Date().toLocaleString("vi-VN");
 
       let foundRow = -1;

@@ -144,14 +144,15 @@ try {
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
               const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout nhanh để không nghẽn AI
+              const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout để Apps Script kịp xử lý
               const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
               clearTimeout(timeoutId);
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
               return await res.json();
             } catch(e) {
               console.log(`[SA] Lỗi kết nối Google Sheet (lần ${attempt}/${maxRetries}):`, e.message);
               if (attempt < maxRetries) {
-                await new Promise(r => setTimeout(r, 600)); // Chờ 600ms rồi thử lại
+                await new Promise(r => setTimeout(r, 1000));
               }
             }
           }
@@ -199,8 +200,8 @@ try {
             await this._fetchSheet({
               action: 'save',
               convId: convId,
-              customerName: encodeURIComponent(finalName),
-              data: encodeURIComponent(JSON.stringify(summaries))
+              customerName: finalName,
+              data: JSON.stringify(summaries)
             });
           } catch(e) { console.log('[SA] Lỗi lưu ngữ cảnh:', e); }
         },
@@ -208,12 +209,12 @@ try {
         async add(convId, summary, customerName) {
           try {
             const finalName = customerName || this._getCustomerName();
-            // GỬI TÓM TẮT MỚI THẲNG LÊN GOOGLE SHEET (Server v6.1 sẽ tự gộp với danh sách cũ)
+            // GỬI TÓM TẮT MỚI THẲNG LÊN GOOGLE SHEET
             await this._fetchSheet({
               action: 'save',
               convId: convId,
-              customerName: encodeURIComponent(finalName),
-              data: encodeURIComponent(summary)
+              customerName: finalName,
+              data: summary
             });
           } catch(e) { console.log('[SA] Lỗi thêm ngữ cảnh:', e); }
         },
@@ -351,16 +352,17 @@ try {
         let result = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 
         // Tách phần tóm tắt ra khỏi kết quả để lưu ngầm
-        const summaryMatch = result.match(/\[TÓM[_ ]TẮT\]\s*:?\s*([\s\S]+)$/i);
+        let summary = "";
+        const summaryMatch = result.match(/(?:^|\n)\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?\s*([\s\S]+)$/i);
         if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
-          const summary = summaryMatch[1].trim();
-          // Lưu tóm tắt vào lịch sử — đồng bộ qua Google Sheet
-          await this.conversationHistory.add(conversationId, summary, customerName);
-          // Xóa phần tóm tắt khỏi kết quả trả về cho user (user không thấy phần này)
-          result = result.replace(/\n*[-—~*_]*\s*\n*\[TÓM[_ ]TẮT\]\s*:?[\s\S]*$/i, '').trim();
-          console.log('[SA] Đã lưu tóm tắt quẻ cho conversation:', conversationId);
+          summary = summaryMatch[1].trim();
+          result = result.replace(/(?:\n+[-—~*_]*)*\s*(?:\n+\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?[\s\S]*)$/i, '').trim();
         } else {
-          console.log('[SA] AI không trả về phần tóm tắt, bỏ qua lưu history');
+          summary = result.slice(0, 300).replace(/\n+/g, ' ').trim();
+        }
+        if (summary) {
+          await this.conversationHistory.add(conversationId, summary, customerName);
+          console.log('[SA] Đã lưu tóm tắt quẻ cho conversation:', conversationId);
         }
 
         return result;
