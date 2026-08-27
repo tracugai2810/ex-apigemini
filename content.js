@@ -158,67 +158,6 @@ try {
           return null;
         },
 
-        // === LOCAL STORAGE (backup/offline) ===
-        async _saveLocal(convId, summaries) {
-          try {
-            const key = this._key(convId);
-            if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
-              await new Promise(r => chrome.storage.local.set({ [key]: summaries }, r));
-            }
-          } catch(e) {}
-        },
-        async _getLocal(convId) {
-          try {
-            const key = this._key(convId);
-            if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
-              const data = await new Promise(r => chrome.storage.local.get([key], r));
-              return data?.[key] || null;
-            }
-          } catch(e) {}
-          return null;
-        },
-        async _removeLocal(convId) {
-          try {
-            const key = this._key(convId);
-            if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
-              await new Promise(r => chrome.storage.local.remove(key, r));
-            }
-          } catch(e) {}
-        },
-
-        // Migrate dữ liệu cũ từ localStorage / chrome.storage.sync (chạy 1 lần)
-        async _migrateOldData(convId) {
-          // 1. Thử localStorage
-          try {
-            const key = this._key(convId);
-            const localData = localStorage.getItem(key);
-            if (localData) {
-              const parsed = JSON.parse(localData);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                await this.save(convId, parsed); // Đẩy lên Sheet + local
-                localStorage.removeItem(key);
-                console.log('[SA] Đã migrate ngữ cảnh từ localStorage:', key);
-                return parsed;
-              }
-              localStorage.removeItem(key);
-            }
-          } catch(e) {}
-          // 2. Thử chrome.storage.sync (từ phiên bản code trước)
-          try {
-            const key = this._key(convId);
-            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
-              const data = await new Promise(r => chrome.storage.sync.get([key], r));
-              if (data?.[key] && Array.isArray(data[key]) && data[key].length > 0) {
-                await this.save(convId, data[key]); // Đẩy lên Sheet + local
-                chrome.storage.sync.remove(key);
-                console.log('[SA] Đã migrate ngữ cảnh từ chrome.storage.sync:', key);
-                return data[key];
-              }
-            }
-          } catch(e) {}
-          return null;
-        },
-
         async get(convId) {
           try {
             // ĐỌC THẲNG TỪ GOOGLE SHEET CHỈ THEO convId 100% (Tuyệt đối không dùng tên khách)
@@ -281,22 +220,10 @@ try {
 
         async clear(convId) {
           try {
-            const key = this._key(convId);
-            this._cache.delete(key);
+            this._cache.delete(this._key(convId));
 
             // Xóa trên Google Sheet
             await this._fetchSheet({ action: 'delete', convId: convId });
-
-            // Xóa local
-            await this._removeLocal(convId);
-
-            // Dọn dẹp cũ
-            try { localStorage.removeItem(key); } catch(e) {}
-            try {
-              if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
-                chrome.storage.sync.remove(key);
-              }
-            } catch(e) {}
           } catch(e) {}
         },
 
@@ -1483,6 +1410,33 @@ try {
           }
         });
       } catch(e) {}
+
+      // === TIMER TỰ ĐỘNG KHÔI PHỤC NÚT BỊ TREO ⌛ (Kiểm tra mỗi 30 giây, không cần F5) ===
+      setInterval(() => {
+        try {
+          Object.keys(localStorage).forEach(k => {
+            if (k.startsWith("sa_running_")) {
+              try {
+                const run = JSON.parse(localStorage.getItem(k) || "{}");
+                if (!run.startTime || Date.now() - run.startTime > 120000) {
+                  localStorage.removeItem(k);
+                  const serial = k.replace("sa_running_", "");
+                  const allBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+                  allBtns.forEach(b => {
+                    b.textContent = "Luận";
+                    b.disabled = false;
+                    b.style.background = "";
+                    b.style.color = "";
+                  });
+                  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+                    chrome.storage.local.remove("sa_running_" + serial);
+                  }
+                }
+              } catch(e) { localStorage.removeItem(k); }
+            }
+          });
+        } catch(e) {}
+      }, 30000);
 
       // === LẮNG NGHE KẾT QUẢ AI TỪ BACKGROUND SERVICE WORKER ===
       if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
