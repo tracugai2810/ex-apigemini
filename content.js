@@ -219,16 +219,12 @@ try {
           return null;
         },
 
-        // === CÁC METHOD CHÍNH (CHỈ QUÉT GOOGLE SHEET 100%) ===
-
         async get(convId) {
           try {
-            const customerName = this._getCustomerName();
-            // ĐỌC THẲNG TỪ GOOGLE SHEET 100% (Không dùng Cache RAM hay LocalStorage)
+            // ĐỌC THẲNG TỪ GOOGLE SHEET CHỈ THEO convId 100% (Tuyệt đối không dùng tên khách)
             const result = await this._fetchSheet({
               action: 'get',
-              convId: convId,
-              customerName: encodeURIComponent(customerName)
+              convId: convId
             });
 
             if (result && result.success && Array.isArray(result.data)) {

@@ -236,12 +236,11 @@ const bgAiService = {
   },
 
   async buildContext(syncSheetUrl, convId, customerName) {
-    if (!syncSheetUrl) return '';
+    if (!syncSheetUrl || !convId) return '';
     try {
       const result = await this.fetchSheet(syncSheetUrl, {
         action: 'get',
-        convId: convId,
-        customerName: encodeURIComponent(customerName || '')
+        convId: convId
       });
       if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
         let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
