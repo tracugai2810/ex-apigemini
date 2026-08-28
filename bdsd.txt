@@ -672,10 +672,17 @@ function extractTransferRemark_(bankText) {
   const ndIndex = text.search(/\b(?:ND|NOI DUNG|ND QR|NOI DUNG QR|LOI NHAN|MESSAGE)[\s:_-]+/i);
   if (ndIndex !== -1) {
     text = text.substring(ndIndex).replace(/^(?:ND|NOI DUNG|ND QR|NOI DUNG QR|LOI NHAN|MESSAGE)[\s:_-]+/i, "");
-  } else {
-    // Nếu không có tiền tố rõ ràng -> xóa các từ khóa hệ thống ngân hàng
-    text = text.replace(/\b(?:VPBANK|VPB|TECHCOMBANK|TCB|VIETCOMBANK|VCB|MBBANK|MBVCB|BIDV|AGRIBANK|ACB|TPB|NAPAS|TRACE|EBANK|IB\w+|FT\w+|STK|NHAN TU|NHAN TIEN)\b[\s\d]*/gi, " ");
   }
+
+  // 1b. Cắt bỏ các mã giao dịch/hệ thống ngân hàng ở đầu chuỗi (VD: "MBVCB 15782087455 6240BFTVGLQ14K5P", "IBVCB", "VCB", "FT...", "TRACE...")
+  // Bắt buộc mã giao dịch đi kèm phải CÓ CHỨA SỐ, gặp từ thuần chữ cái (Họ của khách như NGUYEN) sẽ dừng ngay lập tức
+  text = text.replace(/^(?:MBVCB|IBVCB|VCB|TCB|MB|BIDV|AGRIBANK|ACB|TPB|VPB|VPBANK|NAPAS|TRACE|FT\w+|IB\w+|EBANK)\b(?:\s+[0-9A-Z]*\d[0-9A-Z]*)*\s*/i, " ");
+
+  // 1c. Cắt bỏ phần hậu tố ngân hàng đính kèm ở đuôi (VD: "CT TU 0591000304165 NGUYEN VAN SANG TOI 60696959493 HOANG THI HANH TAI VPBANK")
+  text = text.replace(/\b(?:CT TU|CHUYEN TU|TU STK|TOI STK|TAI VPBANK|TAI NGAN HANG)\b.*$/i, " ");
+
+  // 1d. Nếu không có tiền tố ND -> dọn dẹp các từ khóa ngân hàng chung
+  text = text.replace(/\b(?:VPBANK|VPB|TECHCOMBANK|TCB|VIETCOMBANK|VCB|MBBANK|MBVCB|BIDV|AGRIBANK|ACB|TPB|NAPAS|TRACE|EBANK|IB\w+|FT\w+|STK|NHAN TU|NHAN TIEN)\b[\s\d]*/gi, " ");
 
   // 2. Cắt bỏ tiền tố nhận diện phụ ở đầu (FB, FACEBOOK, ACC, TK, NICK...)
   text = text.replace(/^(?:FB|FACEBOOK|ACC|TK|NICK|QR)\s+/i, "");
