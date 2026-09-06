@@ -207,13 +207,25 @@ const bgAiService = {
       geminiApiKey: '',
       geminiModel: 'gemini-3.7-flash',
       syncSheetUrl: '',
-      luchaoUrl: 'https://dshc-luc-hao.vercel.app/'
+      luchaoUrl: 'https://dshc-luc-hao.vercel.app/',
+      glmApiKey: '',
+      glmModel: 'glm-4.7-flash',
+      customAiBaseUrl: '',
+      customAiApiKey: '',
+      customAiModel: '',
+      queProvider: 'gemini'
     });
     return {
       apiKey: (data.geminiApiKey || '').trim(),
       model: data.geminiModel || 'gemini-3.7-flash',
       syncSheetUrl: (data.syncSheetUrl || '').trim(),
-      luchaoUrl: data.luchaoUrl || 'https://dshc-luc-hao.vercel.app/'
+      luchaoUrl: data.luchaoUrl || 'https://dshc-luc-hao.vercel.app/',
+      glmApiKey: (data.glmApiKey || '').trim(),
+      glmModel: data.glmModel || 'glm-4.7-flash',
+      customAiBaseUrl: (data.customAiBaseUrl || '').trim(),
+      customAiApiKey: (data.customAiApiKey || '').trim(),
+      customAiModel: (data.customAiModel || '').trim(),
+      queProvider: data.queProvider || 'gemini'
     };
   },
 
@@ -320,6 +332,58 @@ const bgAiService = {
     return { json, modelName };
   },
 
+  // === GỌI API OPENAI-COMPATIBLE (GLM, OpenRouter, DeepSeek, v.v.) ===
+  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000) {
+    if (!apiKey) throw new Error("Chưa cấu hình API Key cho provider này");
+    if (!modelName) throw new Error("Chưa cấu hình tên Model");
+
+    // Chuẩn hóa base URL: bỏ trailing slash
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    const endpoint = `${cleanBase}/chat/completions`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      console.log(`[SA-BG] Calling OpenAI-Compatible: ${endpoint} | Model: ${modelName}`);
+
+      const requestBody = {
+        model: modelName,
+        messages: [{ role: "user", content: promptText }]
+      };
+
+      // Tắt suy luận ngầm (thinking) cho Z.AI để tăng tốc phản hồi tối đa, tránh timeout
+      if (cleanBase.includes('z.ai') || cleanBase.includes('bigmodel')) {
+        requestBody.thinking = { type: "disabled" };
+      }
+
+      const headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "Accept-Language": "en-US,en"
+      };
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData?.error?.message || `Error ${res.status}`;
+        throw new Error(`[${modelName}] ${errMsg}`);
+      }
+
+      const json = await res.json();
+      const text = (json.choices?.[0]?.message?.content || "").trim();
+      if (!text) throw new Error(`[${modelName}] API trả về kết quả rỗng`);
+      return text;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
+
   async runAiQue({ serial, date, question, customerName, conversationId }) {
     console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName})`);
     const settings = await this.getSettings();
@@ -383,12 +447,36 @@ const bgAiService = {
     }
     const fullPrompt = prompt + historyContext + summaryInstruction;
 
-    // 5. Gọi AI
+    // 5. Gọi AI theo provider đã chọn
     try {
-      sendStatus(`Đang gọi AI (${settings.model})...`);
-      const payload = { contents: [{ parts: [{ text: fullPrompt }] }] };
-      const { json, modelName } = await this.executeWithFallback(settings.apiKey, settings.model, payload, 45000, (msg) => sendStatus(msg));
-      let aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+      let aiResult = "";
+      let usedModelName = "";
+
+      if (settings.queProvider === 'glm') {
+        // === GLM CHÍNH GỐC (Z.AI) ===
+        usedModelName = settings.glmModel;
+        sendStatus(`Đang luận quẻ với GLM (${usedModelName})...`);
+        aiResult = await this.callOpenAICompatible(
+          'https://api.z.ai/api/paas/v4',
+          usedModelName, settings.glmApiKey, fullPrompt, 120000
+        );
+      } else if (settings.queProvider === 'custom') {
+        // === MODEL TRUNG GIAN (OpenRouter, DeepSeek, v.v.) ===
+        usedModelName = settings.customAiModel;
+        sendStatus(`Đang luận quẻ với ${usedModelName}...`);
+        aiResult = await this.callOpenAICompatible(
+          settings.customAiBaseUrl,
+          usedModelName, settings.customAiApiKey, fullPrompt, 120000
+        );
+      } else {
+        // === GEMINI (MẶC ĐỊNH) — LOGIC GIỮ NGUYÊN 100% ===
+        usedModelName = settings.model;
+        sendStatus(`Đang gọi AI (${usedModelName})...`);
+        const payload = { contents: [{ parts: [{ text: fullPrompt }] }] };
+        const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 45000, (msg) => sendStatus(msg));
+        usedModelName = modelName;
+        aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+      }
 
       if (aiResult && aiResult.length > 10) {
         // Tách tóm tắt linh hoạt (chấp nhận cả **, ###, [TÓM TẮT], TÓM TẮT: ...)
@@ -420,9 +508,9 @@ const bgAiService = {
           type: 'claude',
           content: aiResult,
           customerName,
-          model: modelName
+          model: usedModelName
         });
-        return { success: true, type: 'claude', content: aiResult, model: modelName };
+        return { success: true, type: 'claude', content: aiResult, model: usedModelName };
       }
       throw new Error("AI trả về kết quả rỗng");
     } catch(aiError) {

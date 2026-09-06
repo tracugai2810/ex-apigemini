@@ -90,6 +90,64 @@
       <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
     </section>
 
+    <!-- GLM CHÍNH GỐC -->
+    <section class="card">
+      <h2>🟢 GLM Chính gốc (Z.AI)</h2>
+      <label for="glmApiKey">API Key</label>
+      <input type="password" id="glmApiKey" placeholder="API Key từ z.ai (API Key ID.secret)">
+      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Lấy API Key tại <a href="https://z.ai/manage-apikey/apikey-list" target="_blank" style="color:#60a5fa;">Z.AI → API Keys</a></p>
+      <label for="glmModel" style="margin-top:8px;">Model AI</label>
+      <select id="glmModel" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
+        <option value="glm-4.7-flash">⚡ GLM-4.7-Flash — Free</option>
+        <option value="glm-4.5-flash">⚡ GLM-4.5-Flash — Free</option>
+        <option value="custom">✏️ Tùy chỉnh (Nhập tên Model thủ công...)</option>
+      </select>
+      <div id="glmCustomModelGroup" style="display:none;margin-top:6px;">
+        <input type="text" id="glmCustomModel" placeholder="Nhập mã model (VD: glm-4.5, glm-4.5-air, glm-4.5-airx...)" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
+      </div>
+      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn</p>
+    </section>
+
+    <!-- MODEL TRUNG GIAN (OpenAI-Compatible) -->
+    <section class="card">
+      <h2>🔵 Model Trung gian (OpenRouter, DeepSeek, v.v.)</h2>
+      
+      <label for="customProfileSelect">Cấu hình đang dùng (Bộ URL + Key + Model)</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <select id="customProfileSelect" style="flex:1;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
+          <!-- Tự động nạp danh sách cấu hình đã lưu -->
+        </select>
+        <button type="button" id="btnDeleteProfile" title="Xóa cấu hình đang chọn" style="padding:8px 12px;background:#2d1a24;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;cursor:pointer;font-size:13px;">🗑️</button>
+      </div>
+
+      <label for="customAiBaseUrl" style="margin-top:10px;">Base URL</label>
+      <input type="text" id="customAiBaseUrl" placeholder="https://openrouter.ai/api/v1" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
+
+      <label for="customAiApiKey" style="margin-top:8px;">API Key</label>
+      <input type="password" id="customAiApiKey" placeholder="sk-or-... hoặc API Key của provider">
+
+      <label for="customAiModel" style="margin-top:8px;">Tên Model</label>
+      <input type="text" id="customAiModel" placeholder="z-ai/glm-5.2:free" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
+
+      <div style="margin-top:10px;display:flex;justify-content:flex-end;">
+        <button type="button" id="btnSaveAsNewProfile" style="padding:8px 14px;background:#0f4c75;color:#64ffda;border:1px solid #1b6ca8;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;">➕ Lưu thành Cấu hình Mới</button>
+      </div>
+
+      <p style="color:#94a3b8;font-size:11px;margin-top:8px;">Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
+    </section>
+
+    <!-- CHỌN MODEL LUẬN QUẺ -->
+    <section class="card">
+      <h2>🎯 Chọn Model Luận Quẻ</h2>
+      <label for="queProvider">Model dùng để Luận quẻ</label>
+      <select id="queProvider" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
+        <option value="gemini">🔍 Gemini (mặc định) — Dùng API & Model ở mục Gemini AI</option>
+        <option value="glm">🟢 GLM Chính gốc — Dùng API & Model ở mục GLM</option>
+        <option value="custom">🔵 Model Trung gian — Dùng URL, API & Model ở mục Trung gian</option>
+      </select>
+      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ ảnh hưởng phần Luận quẻ. OCR quét seri vẫn luôn dùng Gemini.</p>
+    </section>
+
     <!-- BUSINESS -->
     <section class="card">
       <h2>🟩 Business Popup</h2>
