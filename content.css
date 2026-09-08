@@ -5,12 +5,14 @@
   position: fixed; top: 12px; right: 16px; z-index: 2147483647;
   max-width: 320px; padding: 10px 16px; border-radius: 12px;
   color: #fff; font: 600 13px/1.4 system-ui;
+  background: #1e40af;
   box-shadow: 0 4px 20px rgba(0,0,0,0.25);
   animation: sa-in 0.2s ease-out;
 }
-.sapo-ao-toast.info { background: #1e40af; }
+.sapo-ao-toast.info,
+.sapo-ao-toast.warning { background: #1e40af; }
 .sapo-ao-toast.success { background: #166534; }
-.sapo-ao-toast.error { background: #991b1b; }
+.sapo-ao-toast.error   { background: #991b1b; }
 @keyframes sa-in {
   from { opacity: 0; transform: translateY(-10px); }
   to { opacity: 1; transform: translateY(0); }
