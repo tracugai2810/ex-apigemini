@@ -90,27 +90,9 @@
       <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
     </section>
 
-    <!-- GLM CHÍNH GỐC -->
+    <!-- MODEL PHỤ (OpenAI-Compatible) DÀNH CHO NÚT "KHÁC" -->
     <section class="card">
-      <h2>🟢 GLM Chính gốc (Z.AI)</h2>
-      <label for="glmApiKey">API Key</label>
-      <input type="password" id="glmApiKey" placeholder="API Key từ z.ai (API Key ID.secret)">
-      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Lấy API Key tại <a href="https://z.ai/manage-apikey/apikey-list" target="_blank" style="color:#60a5fa;">Z.AI → API Keys</a></p>
-      <label for="glmModel" style="margin-top:8px;">Model AI</label>
-      <select id="glmModel" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
-        <option value="glm-4.7-flash">⚡ GLM-4.7-Flash — Free</option>
-        <option value="glm-4.5-flash">⚡ GLM-4.5-Flash — Free</option>
-        <option value="custom">✏️ Tùy chỉnh (Nhập tên Model thủ công...)</option>
-      </select>
-      <div id="glmCustomModelGroup" style="display:none;margin-top:6px;">
-        <input type="text" id="glmCustomModel" placeholder="Nhập mã model (VD: glm-4.5, glm-4.5-air, glm-4.5-airx...)" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
-      </div>
-      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn</p>
-    </section>
-
-    <!-- MODEL TRUNG GIAN (OpenAI-Compatible) -->
-    <section class="card">
-      <h2>🔵 Model Trung gian (OpenRouter, DeepSeek, v.v.)</h2>
+      <h2>🔵 Model Phụ (Z.AI, OpenRouter, DeepSeek...) — Nút "Khác"</h2>
       
       <label for="customProfileSelect">Cấu hình đang dùng (Bộ URL + Key + Model)</label>
       <div style="display:flex;gap:6px;align-items:center;">
@@ -121,46 +103,41 @@
       </div>
 
       <label for="customAiBaseUrl" style="margin-top:10px;">Base URL</label>
-      <input type="text" id="customAiBaseUrl" placeholder="https://openrouter.ai/api/v1" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
+      <input type="text" id="customAiBaseUrl" placeholder="https://api.z.ai/api/paas/v4 hoặc https://openrouter.ai/api/v1" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
 
       <label for="customAiApiKey" style="margin-top:8px;">API Key</label>
-      <input type="password" id="customAiApiKey" placeholder="sk-or-... hoặc API Key của provider">
+      <input type="password" id="customAiApiKey" placeholder="API Key của provider tương ứng">
 
       <label for="customAiModel" style="margin-top:8px;">Tên Model</label>
-      <input type="text" id="customAiModel" placeholder="z-ai/glm-5.2:free" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
+      <input type="text" id="customAiModel" placeholder="glm-4.7-flash hoặc z-ai/glm-5.2:free" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
 
       <div style="margin-top:10px;display:flex;justify-content:flex-end;">
         <button type="button" id="btnSaveAsNewProfile" style="padding:8px 14px;background:#0f4c75;color:#64ffda;border:1px solid #1b6ca8;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;">➕ Lưu thành Cấu hình Mới</button>
       </div>
 
-      <p style="color:#94a3b8;font-size:11px;margin-top:8px;">Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
+      <p style="color:#94a3b8;font-size:11px;margin-top:8px;">Chuẩn OpenAI-Compatible. Hỗ trợ mọi nhà cung cấp như Z.AI (GLM), OpenRouter, DeepSeek... Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
     </section>
 
     <!-- CẤU HÌNH 2 NÚT LUẬN QUẺ SONG SONG -->
     <section class="card">
-      <h2>🎯 Cấu hình 2 Nút Luận Quẻ Song Song</h2>
+      <h2>🎯 Hoạt Động Của 2 Nút Luận Quẻ Song Song</h2>
 
-      <!-- NÚT LUẬN (CỐ ĐỊNH GEMINI) -->
+      <!-- NÚT GEMINI -->
       <div style="margin-bottom:12px;padding:10px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#d97706;color:white;font-weight:700;font-size:12px;">NÚT GEMINI</span>
-          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">🔍 Gemini AI (Mặc định cố định)</span>
+          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">🔍 Gemini AI (Cố định)</span>
         </div>
         <p style="color:#94a3b8;font-size:11px;margin-top:4px;margin-bottom:0;">Luôn dùng API & Model ở mục <b>Gemini AI</b> để luận quẻ (kèm cơ chế tự động đổi API dự phòng & fallback model).</p>
       </div>
 
-      <!-- NÚT KHÁC (CHỌN GLM HOẶC TRUNG GIAN) -->
+      <!-- NÚT KHÁC -->
       <div style="padding:10px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
           <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#16a34a;color:white;font-weight:700;font-size:12px;">NÚT KHÁC</span>
-          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">Chọn Model Luận Quẻ Phụ</span>
+          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">🤖 Model Phụ (Z.AI / OpenRouter / DeepSeek...)</span>
         </div>
-        <label for="chuProvider" style="font-size:12px;color:#94a3b8;">Model thực thi khi bấm nút "Khác":</label>
-        <select id="chuProvider" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;margin-top:4px;">
-          <option value="glm">🟢 GLM Chính gốc (Z.AI) — Dùng API & Model ở mục GLM</option>
-          <option value="custom">🔵 Model Trung gian (OpenRouter, DeepSeek...) — Dùng ở mục Trung gian</option>
-        </select>
-        <p style="color:#94a3b8;font-size:11px;margin-top:6px;margin-bottom:0;">Bấm nút "Khác" trên quẻ sẽ gọi Model này, kế thừa và lưu nối tiếp ngữ cảnh Google Sheet.</p>
+        <p style="color:#94a3b8;font-size:11px;margin-top:2px;margin-bottom:0;">Bấm nút "Khác" sẽ gọi cấu hình đang chọn ở mục <b>Model Phụ</b>, tự động kế thừa và lưu nối tiếp ngữ cảnh Google Sheet.</p>
       </div>
     </section>
 

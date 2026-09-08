@@ -14,13 +14,17 @@ const DEFAULTS = {
   geminiCustomModel: '',
   syncSheetUrl:    '',
   gasBankingUrl:   '',
-  glmApiKey:       '',
-  glmModel:        'glm-4.7-flash',
-  glmCustomModel:  '',
-  customAiBaseUrl: 'https://openrouter.ai/api/v1',
+  customAiBaseUrl: 'https://api.z.ai/api/paas/v4',
   customAiApiKey:  '',
-  customAiModel:   'z-ai/glm-5.2:free',
+  customAiModel:   'glm-4.7-flash',
   customAiProfiles: [
+    {
+      id: 'prof_zai_glm',
+      label: 'Z.AI — GLM-4.7-Flash',
+      baseUrl: 'https://api.z.ai/api/paas/v4',
+      apiKey: '',
+      model: 'glm-4.7-flash'
+    },
     {
       id: 'prof_openrouter_glm52',
       label: 'OpenRouter — z-ai/glm-5.2:free',
@@ -29,9 +33,8 @@ const DEFAULTS = {
       model: 'z-ai/glm-5.2:free'
     }
   ],
-  customAiSelectedProfileId: 'prof_openrouter_glm52',
-  queProvider:     'gemini',
-  chuProvider:     'glm'
+  customAiSelectedProfileId: 'prof_zai_glm',
+  queProvider:     'gemini'
 };
 
 const ids = Object.keys(DEFAULTS);
@@ -57,19 +60,14 @@ function updateCustomModelVisibility() {
   }
 }
 
-function updateGlmCustomModelVisibility() {
-  const glmSelect = els.glmModel;
-  const glmCustomGroup = document.getElementById('glmCustomModelGroup');
-  if (glmSelect && glmCustomGroup) {
-    if (glmSelect.value === 'custom') {
-      glmCustomGroup.style.display = 'block';
-    } else {
-      glmCustomGroup.style.display = 'none';
-    }
-  }
-}
-
 let currentProfiles = [
+  {
+    id: 'prof_zai_glm',
+    label: 'Z.AI — GLM-4.7-Flash',
+    baseUrl: 'https://api.z.ai/api/paas/v4',
+    apiKey: '',
+    model: 'glm-4.7-flash'
+  },
   {
     id: 'prof_openrouter_glm52',
     label: 'OpenRouter — z-ai/glm-5.2:free',
@@ -78,7 +76,7 @@ let currentProfiles = [
     model: 'z-ai/glm-5.2:free'
   }
 ];
-let activeProfileId = 'prof_openrouter_glm52';
+let activeProfileId = 'prof_zai_glm';
 
 function getProviderNameFromUrl(url) {
   try {
@@ -130,11 +128,6 @@ function loadSettings() {
       else els[id].value = data[id];
     });
 
-    // Fallback thông minh cho chuProvider nếu trước đó từng chọn queProvider
-    if (els.chuProvider) {
-      els.chuProvider.value = data.chuProvider || (data.queProvider === 'custom' ? 'custom' : 'glm');
-    }
-
     // Gemini model: detect custom
     const modelSelect = els.geminiModel;
     const customInput = els.geminiCustomModel;
@@ -149,30 +142,33 @@ function loadSettings() {
     }
     updateCustomModelVisibility();
 
-    // GLM model: detect custom
-    const glmSelect = els.glmModel;
-    const glmCustomInput = els.glmCustomModel;
-    if (glmSelect && glmCustomInput) {
-      const isKnownGlm = Array.from(glmSelect.options).some(opt => opt.value === data.glmModel && opt.value !== 'custom');
-      if (data.glmModel && !isKnownGlm) {
-        glmSelect.value = 'custom';
-        glmCustomInput.value = data.glmModel;
-      } else if (glmSelect.value === 'custom') {
-        glmCustomInput.value = data.glmCustomModel || '';
-      }
-    }
-    updateGlmCustomModelVisibility();
-
-    // Model Trung gian: Nạp danh sách Profiles (Bộ URL + Key + Model)
+    // Model Phụ: Nạp danh sách Profiles (Bộ URL + Key + Model)
     let profiles = data.customAiProfiles;
     if (!Array.isArray(profiles) || profiles.length === 0) {
-      profiles = [{
-        id: 'prof_default',
-        label: makeProfileLabel(data.customAiBaseUrl || 'https://openrouter.ai/api/v1', data.customAiModel || 'z-ai/glm-5.2:free'),
-        baseUrl: data.customAiBaseUrl || 'https://openrouter.ai/api/v1',
-        apiKey: data.customAiApiKey || '',
-        model: data.customAiModel || 'z-ai/glm-5.2:free'
-      }];
+      profiles = [
+        {
+          id: 'prof_zai_glm',
+          label: 'Z.AI — GLM-4.7-Flash',
+          baseUrl: 'https://api.z.ai/api/paas/v4',
+          apiKey: data.glmApiKey || '',
+          model: data.glmModel || 'glm-4.7-flash'
+        },
+        {
+          id: 'prof_openrouter_glm52',
+          label: 'OpenRouter — z-ai/glm-5.2:free',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: '',
+          model: 'z-ai/glm-5.2:free'
+        }
+      ];
+    } else {
+      // Tự động chuyển giao key cũ của GLM sang profile Z.AI nếu có
+      if (data.glmApiKey) {
+        const zaiProf = profiles.find(p => p.baseUrl && p.baseUrl.includes('z.ai'));
+        if (zaiProf && !zaiProf.apiKey) {
+          zaiProf.apiKey = data.glmApiKey;
+        }
+      }
     }
     currentProfiles = profiles;
     activeProfileId = data.customAiSelectedProfileId || profiles[0].id;
@@ -211,25 +207,12 @@ function saveSettings() {
     selectedModel = customModelVal;
   }
 
-  // Validate provider luận quẻ cho nút Chữ
-  const chuProviderVal = els.chuProvider ? els.chuProvider.value : 'glm';
-  const glmApiKeyVal = (els.glmApiKey ? els.glmApiKey.value : '').trim();
-  const glmCustomModelVal = els.glmCustomModel ? els.glmCustomModel.value.trim() : '';
-  let selectedGlmModel = els.glmModel ? els.glmModel.value : 'glm-4.7-flash';
-  if (selectedGlmModel === 'custom') {
-    if (chuProviderVal === 'glm' && !glmCustomModelVal) {
-      showStatus('❌ Vui lòng nhập tên model GLM tùy chỉnh!');
-      return;
-    }
-    selectedGlmModel = glmCustomModelVal || 'glm-4.7-flash';
-  }
-
   const customAiBaseUrlVal = (els.customAiBaseUrl ? els.customAiBaseUrl.value : '').trim();
   const customAiApiKeyVal = (els.customAiApiKey ? els.customAiApiKey.value : '').trim();
   const customAiModelVal = (els.customAiModel ? els.customAiModel.value : '').trim();
 
   if (customAiBaseUrlVal && !customAiBaseUrlVal.startsWith('https://')) {
-    showStatus('❌ Base URL Model Trung gian phải bắt đầu bằng https://');
+    showStatus('❌ Base URL Model Phụ phải bắt đầu bằng https://');
     return;
   }
 
@@ -253,16 +236,12 @@ function saveSettings() {
     geminiCustomModel: customModelVal,
     syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : ''),
     gasBankingUrl: (els.gasBankingUrl ? els.gasBankingUrl.value.trim() : ''),
-    glmApiKey: glmApiKeyVal,
-    glmModel: selectedGlmModel,
-    glmCustomModel: glmCustomModelVal,
     customAiBaseUrl: customAiBaseUrlVal,
     customAiApiKey: customAiApiKeyVal,
     customAiModel: customAiModelVal,
     customAiProfiles: currentProfiles,
     customAiSelectedProfileId: activeProfileId,
-    queProvider: 'gemini',
-    chuProvider: chuProviderVal
+    queProvider: 'gemini'
   }, () => showStatus('✅ Đã lưu thành công!'));
 }
 
@@ -272,9 +251,6 @@ function resetSettings() {
 
 if (els.geminiModel) {
   els.geminiModel.addEventListener('change', updateCustomModelVisibility);
-}
-if (els.glmModel) {
-  els.glmModel.addEventListener('change', updateGlmCustomModelVisibility);
 }
 
 // Khi chuyển đổi Cấu hình trong dropdown

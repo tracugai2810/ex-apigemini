@@ -1365,7 +1365,7 @@ try {
 
         const convId = self.utils.getActiveConversationId();
         const dateObj = date ? { year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate(), hour: date.getHours(), min: date.getMinutes() } : null;
-        const currentModel = (triggerSource === 'chu') ? "Model Phụ (GLM/Trung gian)" : (self.aiService.model || "Gemini");
+        const currentModel = (triggerSource === 'chu') ? "Model Phụ" : (self.aiService.model || "Gemini");
 
         self.utils.toast(`⌛ [${capturedCustomerName || serial}] Đang gọi AI (${currentModel})...`, "info");
 

@@ -208,26 +208,33 @@ const bgAiService = {
       geminiModel: 'gemini-3.7-flash',
       syncSheetUrl: '',
       luchaoUrl: 'https://dshc-luc-hao.vercel.app/',
-      glmApiKey: '',
-      glmModel: 'glm-4.7-flash',
       customAiBaseUrl: '',
       customAiApiKey: '',
       customAiModel: '',
-      queProvider: 'gemini',
-      chuProvider: 'glm'
+      glmApiKey: '',
+      glmModel: 'glm-4.7-flash',
+      queProvider: 'gemini'
     });
+
+    // Fallback thông minh: nếu chưa có customAiBaseUrl mà có glmApiKey cũ -> tự động dùng Z.AI
+    let customBase = (data.customAiBaseUrl || '').trim();
+    let customKey = (data.customAiApiKey || '').trim();
+    let customMod = (data.customAiModel || '').trim();
+    if (!customBase && data.glmApiKey) {
+      customBase = 'https://api.z.ai/api/paas/v4';
+      customKey = (data.glmApiKey || '').trim();
+      customMod = data.glmModel || 'glm-4.7-flash';
+    }
+
     return {
       apiKey: (data.geminiApiKey || '').trim(),
       model: data.geminiModel || 'gemini-3.7-flash',
       syncSheetUrl: (data.syncSheetUrl || '').trim(),
       luchaoUrl: data.luchaoUrl || 'https://dshc-luc-hao.vercel.app/',
-      glmApiKey: (data.glmApiKey || '').trim(),
-      glmModel: data.glmModel || 'glm-4.7-flash',
-      customAiBaseUrl: (data.customAiBaseUrl || '').trim(),
-      customAiApiKey: (data.customAiApiKey || '').trim(),
-      customAiModel: (data.customAiModel || '').trim(),
-      queProvider: data.queProvider || 'gemini',
-      chuProvider: data.chuProvider || (data.queProvider === 'custom' ? 'custom' : 'glm')
+      customAiBaseUrl: customBase,
+      customAiApiKey: customKey,
+      customAiModel: customMod,
+      queProvider: data.queProvider || 'gemini'
     };
   },
 
@@ -455,32 +462,19 @@ const bgAiService = {
       let aiResult = "";
       let usedModelName = "";
 
-      // Xác định provider: Nút 'chu' dùng chuProvider, nút 'luan' cố định Gemini
-      let effectiveProvider = 'gemini';
       if (triggerSource === 'chu') {
-        effectiveProvider = settings.chuProvider || (settings.queProvider === 'custom' ? 'custom' : 'glm');
-      } else {
-        effectiveProvider = 'gemini'; // Nút Luận luôn cố định 100% chạy luồng Gemini gốc
-      }
-
-      if (effectiveProvider === 'glm') {
-        // === GLM CHÍNH GỐC (Z.AI) ===
-        usedModelName = settings.glmModel;
-        sendStatus(`Đang luận quẻ với GLM (${usedModelName})...`);
-        aiResult = await this.callOpenAICompatible(
-          'https://api.z.ai/api/paas/v4',
-          usedModelName, settings.glmApiKey, fullPrompt, 120000
-        );
-      } else if (effectiveProvider === 'custom') {
-        // === MODEL TRUNG GIAN (OpenRouter, DeepSeek, v.v.) ===
-        usedModelName = settings.customAiModel;
+        // === MODEL PHỤ (NÚT "KHÁC" — TÙY CHỈNH OPENAI-COMPATIBLE: Z.AI, OPENROUTER, DEEPSEEK...) ===
+        usedModelName = settings.customAiModel || "Model Phụ";
         sendStatus(`Đang luận quẻ với ${usedModelName}...`);
         aiResult = await this.callOpenAICompatible(
           settings.customAiBaseUrl,
-          usedModelName, settings.customAiApiKey, fullPrompt, 120000
+          settings.customAiModel,
+          settings.customAiApiKey,
+          fullPrompt,
+          120000
         );
       } else {
-        // === GEMINI (MẶC ĐỊNH CHO NÚT LUẬN) — LOGIC GIỮ NGUYÊN 100% ===
+        // === GEMINI (MẶC ĐỊNH CHO NÚT GEMINI) — LOGIC GIỮ NGUYÊN 100% ===
         usedModelName = settings.model;
         sendStatus(`Đang gọi AI (${usedModelName})...`);
         const payload = { contents: [{ parts: [{ text: fullPrompt }] }] };
