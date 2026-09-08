@@ -136,16 +136,32 @@
       <p style="color:#94a3b8;font-size:11px;margin-top:8px;">Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
     </section>
 
-    <!-- CHỌN MODEL LUẬN QUẺ -->
+    <!-- CẤU HÌNH 2 NÚT LUẬN QUẺ SONG SONG -->
     <section class="card">
-      <h2>🎯 Chọn Model Luận Quẻ</h2>
-      <label for="queProvider">Model dùng để Luận quẻ</label>
-      <select id="queProvider" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
-        <option value="gemini">🔍 Gemini (mặc định) — Dùng API & Model ở mục Gemini AI</option>
-        <option value="glm">🟢 GLM Chính gốc — Dùng API & Model ở mục GLM</option>
-        <option value="custom">🔵 Model Trung gian — Dùng URL, API & Model ở mục Trung gian</option>
-      </select>
-      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ ảnh hưởng phần Luận quẻ. OCR quét seri vẫn luôn dùng Gemini.</p>
+      <h2>🎯 Cấu hình 2 Nút Luận Quẻ Song Song</h2>
+
+      <!-- NÚT LUẬN (CỐ ĐỊNH GEMINI) -->
+      <div style="margin-bottom:12px;padding:10px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#d97706;color:white;font-weight:700;font-size:12px;">NÚT GEMINI</span>
+          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">🔍 Gemini AI (Mặc định cố định)</span>
+        </div>
+        <p style="color:#94a3b8;font-size:11px;margin-top:4px;margin-bottom:0;">Luôn dùng API & Model ở mục <b>Gemini AI</b> để luận quẻ (kèm cơ chế tự động đổi API dự phòng & fallback model).</p>
+      </div>
+
+      <!-- NÚT KHÁC (CHỌN GLM HOẶC TRUNG GIAN) -->
+      <div style="padding:10px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#16a34a;color:white;font-weight:700;font-size:12px;">NÚT KHÁC</span>
+          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">Chọn Model Luận Quẻ Phụ</span>
+        </div>
+        <label for="chuProvider" style="font-size:12px;color:#94a3b8;">Model thực thi khi bấm nút "Khác":</label>
+        <select id="chuProvider" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;margin-top:4px;">
+          <option value="glm">🟢 GLM Chính gốc (Z.AI) — Dùng API & Model ở mục GLM</option>
+          <option value="custom">🔵 Model Trung gian (OpenRouter, DeepSeek...) — Dùng ở mục Trung gian</option>
+        </select>
+        <p style="color:#94a3b8;font-size:11px;margin-top:6px;margin-bottom:0;">Bấm nút "Khác" trên quẻ sẽ gọi Model này, kế thừa và lưu nối tiếp ngữ cảnh Google Sheet.</p>
+      </div>
     </section>
 
     <!-- BUSINESS -->

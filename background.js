@@ -213,7 +213,8 @@ const bgAiService = {
       customAiBaseUrl: '',
       customAiApiKey: '',
       customAiModel: '',
-      queProvider: 'gemini'
+      queProvider: 'gemini',
+      chuProvider: 'glm'
     });
     return {
       apiKey: (data.geminiApiKey || '').trim(),
@@ -225,7 +226,8 @@ const bgAiService = {
       customAiBaseUrl: (data.customAiBaseUrl || '').trim(),
       customAiApiKey: (data.customAiApiKey || '').trim(),
       customAiModel: (data.customAiModel || '').trim(),
-      queProvider: data.queProvider || 'gemini'
+      queProvider: data.queProvider || 'gemini',
+      chuProvider: data.chuProvider || (data.queProvider === 'custom' ? 'custom' : 'glm')
     };
   },
 
@@ -384,8 +386,8 @@ const bgAiService = {
     }
   },
 
-  async runAiQue({ serial, date, question, customerName, conversationId }) {
-    console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName})`);
+  async runAiQue({ serial, date, question, customerName, conversationId, triggerSource = 'luan' }) {
+    console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName}, Nguồn: ${triggerSource})`);
     const settings = await this.getSettings();
     const base = settings.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
     const baseUrl = base.endsWith('/') ? base : base + '/';
@@ -395,6 +397,7 @@ const bgAiService = {
         action: 'AI_QUE_STATUS',
         serial,
         customerName,
+        triggerSource,
         message: msg
       });
     };
@@ -447,12 +450,20 @@ const bgAiService = {
     }
     const fullPrompt = prompt + historyContext + summaryInstruction;
 
-    // 5. Gọi AI theo provider đã chọn
+    // 5. Gọi AI theo provider đã chọn cho nút bấm tương ứng
     try {
       let aiResult = "";
       let usedModelName = "";
 
-      if (settings.queProvider === 'glm') {
+      // Xác định provider: Nút 'chu' dùng chuProvider, nút 'luan' cố định Gemini
+      let effectiveProvider = 'gemini';
+      if (triggerSource === 'chu') {
+        effectiveProvider = settings.chuProvider || (settings.queProvider === 'custom' ? 'custom' : 'glm');
+      } else {
+        effectiveProvider = 'gemini'; // Nút Luận luôn cố định 100% chạy luồng Gemini gốc
+      }
+
+      if (effectiveProvider === 'glm') {
         // === GLM CHÍNH GỐC (Z.AI) ===
         usedModelName = settings.glmModel;
         sendStatus(`Đang luận quẻ với GLM (${usedModelName})...`);
@@ -460,7 +471,7 @@ const bgAiService = {
           'https://api.z.ai/api/paas/v4',
           usedModelName, settings.glmApiKey, fullPrompt, 120000
         );
-      } else if (settings.queProvider === 'custom') {
+      } else if (effectiveProvider === 'custom') {
         // === MODEL TRUNG GIAN (OpenRouter, DeepSeek, v.v.) ===
         usedModelName = settings.customAiModel;
         sendStatus(`Đang luận quẻ với ${usedModelName}...`);
@@ -469,7 +480,7 @@ const bgAiService = {
           usedModelName, settings.customAiApiKey, fullPrompt, 120000
         );
       } else {
-        // === GEMINI (MẶC ĐỊNH) — LOGIC GIỮ NGUYÊN 100% ===
+        // === GEMINI (MẶC ĐỊNH CHO NÚT LUẬN) — LOGIC GIỮ NGUYÊN 100% ===
         usedModelName = settings.model;
         sendStatus(`Đang gọi AI (${usedModelName})...`);
         const payload = { contents: [{ parts: [{ text: fullPrompt }] }] };
@@ -495,29 +506,32 @@ const bgAiService = {
           await this.saveSummary(settings.syncSheetUrl, conversationId, summary, customerName);
         }
 
-        // Lưu kết quả Claude
+        // Lưu kết quả theo triggerSource để không bao giờ ghi đè lẫn nhau
+        const resKey = `sa_res_${triggerSource}_${serial}`;
         await chrome.storage.local.set({
-          ['sa_res_' + serial]: JSON.stringify({ type: 'claude', content: aiResult })
+          [resKey]: JSON.stringify({ type: 'claude', content: aiResult, model: usedModelName, triggerSource })
         });
         await chrome.storage.local.remove('sa_running_' + serial);
 
-        // Broadcast hoàn tất
+        // Broadcast hoàn tất kèm triggerSource
         broadcastMessage({
           action: 'AI_QUE_COMPLETED',
           serial,
           type: 'claude',
           content: aiResult,
           customerName,
-          model: usedModelName
+          model: usedModelName,
+          triggerSource
         });
-        return { success: true, type: 'claude', content: aiResult, model: usedModelName };
+        return { success: true, type: 'claude', content: aiResult, model: usedModelName, triggerSource };
       }
       throw new Error("AI trả về kết quả rỗng");
     } catch(aiError) {
       console.warn('[SA-BG] AI thất bại, fallback sang Gemini web:', aiError);
       // Fallback Gemini
+      const resKey = `sa_res_${triggerSource}_${serial}`;
       await chrome.storage.local.set({
-        ['sa_res_' + serial]: JSON.stringify({ type: 'gemini', content: copyText })
+        [resKey]: JSON.stringify({ type: 'gemini', content: copyText, triggerSource })
       });
       await chrome.storage.local.remove('sa_running_' + serial);
 
@@ -526,9 +540,10 @@ const bgAiService = {
         serial,
         type: 'gemini',
         content: copyText,
-        customerName
+        customerName,
+        triggerSource
       });
-      return { success: true, type: 'gemini', content: copyText };
+      return { success: true, type: 'gemini', content: copyText, triggerSource };
     }
   }
 };
@@ -547,12 +562,12 @@ function broadcastMessage(msg) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
   if (msg.action === 'startAiQue') {
-    const { serial, date, question, customerName, conversationId } = msg;
+    const { serial, date, question, customerName, conversationId, triggerSource = 'luan' } = msg;
     chrome.storage.local.set({
-      ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '' }
+      ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '', triggerSource }
     });
 
-    bgAiService.runAiQue({ serial, date, question, customerName, conversationId })
+    bgAiService.runAiQue({ serial, date, question, customerName, conversationId, triggerSource })
       .catch((err) => {
         console.error('[SA-BG] Lỗi chạy task Luận quẻ:', err);
         chrome.storage.local.remove('sa_running_' + serial);
@@ -560,7 +575,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           action: 'AI_QUE_FAILED',
           serial,
           error: err.message || 'Lỗi không xác định',
-          customerName
+          customerName,
+          triggerSource
         });
       });
 

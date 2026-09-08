@@ -30,7 +30,8 @@ const DEFAULTS = {
     }
   ],
   customAiSelectedProfileId: 'prof_openrouter_glm52',
-  queProvider:     'gemini'
+  queProvider:     'gemini',
+  chuProvider:     'glm'
 };
 
 const ids = Object.keys(DEFAULTS);
@@ -129,6 +130,11 @@ function loadSettings() {
       else els[id].value = data[id];
     });
 
+    // Fallback thông minh cho chuProvider nếu trước đó từng chọn queProvider
+    if (els.chuProvider) {
+      els.chuProvider.value = data.chuProvider || (data.queProvider === 'custom' ? 'custom' : 'glm');
+    }
+
     // Gemini model: detect custom
     const modelSelect = els.geminiModel;
     const customInput = els.geminiCustomModel;
@@ -205,13 +211,13 @@ function saveSettings() {
     selectedModel = customModelVal;
   }
 
-  // Validate provider luận quẻ
-  const queProvider = els.queProvider ? els.queProvider.value : 'gemini';
+  // Validate provider luận quẻ cho nút Chữ
+  const chuProviderVal = els.chuProvider ? els.chuProvider.value : 'glm';
   const glmApiKeyVal = (els.glmApiKey ? els.glmApiKey.value : '').trim();
   const glmCustomModelVal = els.glmCustomModel ? els.glmCustomModel.value.trim() : '';
   let selectedGlmModel = els.glmModel ? els.glmModel.value : 'glm-4.7-flash';
   if (selectedGlmModel === 'custom') {
-    if (queProvider === 'glm' && !glmCustomModelVal) {
+    if (chuProviderVal === 'glm' && !glmCustomModelVal) {
       showStatus('❌ Vui lòng nhập tên model GLM tùy chỉnh!');
       return;
     }
@@ -222,14 +228,9 @@ function saveSettings() {
   const customAiApiKeyVal = (els.customAiApiKey ? els.customAiApiKey.value : '').trim();
   const customAiModelVal = (els.customAiModel ? els.customAiModel.value : '').trim();
 
-  if (queProvider === 'glm') {
-    if (!glmApiKeyVal) { showStatus('❌ Vui lòng nhập API Key GLM!'); return; }
-  }
-  if (queProvider === 'custom') {
-    if (!customAiBaseUrlVal) { showStatus('❌ Vui lòng nhập Base URL!'); return; }
-    if (!customAiBaseUrlVal.startsWith('https://')) { showStatus('❌ Base URL phải bắt đầu bằng https://'); return; }
-    if (!customAiApiKeyVal) { showStatus('❌ Vui lòng nhập API Key trung gian!'); return; }
-    if (!customAiModelVal) { showStatus('❌ Vui lòng nhập Tên Model trung gian!'); return; }
+  if (customAiBaseUrlVal && !customAiBaseUrlVal.startsWith('https://')) {
+    showStatus('❌ Base URL Model Trung gian phải bắt đầu bằng https://');
+    return;
   }
 
   // Cập nhật thông tin profile đang chọn
@@ -260,7 +261,8 @@ function saveSettings() {
     customAiModel: customAiModelVal,
     customAiProfiles: currentProfiles,
     customAiSelectedProfileId: activeProfileId,
-    queProvider: queProvider
+    queProvider: 'gemini',
+    chuProvider: chuProviderVal
   }, () => showStatus('✅ Đã lưu thành công!'));
 }
 

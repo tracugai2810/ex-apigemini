@@ -247,10 +247,10 @@
 
 .sa-mini-btn {
   border: none; outline: none;
-  width: 40px; height: 26px; /* Kích thước đồng nhất với nút 20k 50k */
+  min-width: 42px; width: auto; padding: 0 6px; height: 26px;
   border-radius: 6px;
   color: #fff;
-  font: 700 10px system-ui;
+  font: 700 11px system-ui;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: transform 0.1s;
@@ -330,4 +330,12 @@
   margin-right: 3px;
   font-size: 10px;
 }
+
+/* Trạng thái disabled cho các nút action */
+.sa-mini-btn:disabled, .sa-text-btn:disabled {
+  cursor: not-allowed !important;
+  transform: none !important;
+  filter: none !important;
+}
+
 

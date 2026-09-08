@@ -652,16 +652,18 @@ try {
         };
       },
 
-      applySavedState(btn, serial, originalText, originalOnClick) {
-        const savedStr = localStorage.getItem("sa_res_" + serial);
+      applySavedState(btn, serial, originalText, originalOnClick, btnType = 'luan') {
+        const specificKey = `sa_res_${btnType}_${serial}`;
+        let savedStr = localStorage.getItem(specificKey);
         if (!savedStr) {
           // Thử lấy từ chrome.storage.local nếu localStorage chưa kịp ghi
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-            chrome.storage.local.get(["sa_res_" + serial], (res) => {
-              if (res && res["sa_res_" + serial]) {
+            chrome.storage.local.get([specificKey], (res) => {
+              const val = res?.[specificKey];
+              if (val) {
                 try {
-                  localStorage.setItem("sa_res_" + serial, res["sa_res_" + serial]);
-                  SapoAuto_v1.ui.applySavedState(btn, serial, originalText, originalOnClick);
+                  localStorage.setItem(specificKey, val);
+                  SapoAuto_v1.ui.applySavedState(btn, serial, originalText, originalOnClick, btnType);
                 } catch(e) {}
               }
             });
@@ -672,6 +674,7 @@ try {
           const saved = JSON.parse(savedStr);
           btn.textContent = "Copy";
           btn.disabled = false;
+          btn.style.opacity = "1";
           if (saved.type === 'claude') {
              btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
           } else {
@@ -682,25 +685,31 @@ try {
              e.stopPropagation(); e.preventDefault();
              try {
                await navigator.clipboard.writeText(saved.content);
-               const toastMsg = saved.type === 'claude' ? "📋 Đã copy và mở Claude..." : "📋 Đã copy và mở Gemini...";
+               const popupAction = (saved.type === 'claude') ? 'openClaudeDirectPopup' : 'openGeminiPopup';
+               const popupLabel = (saved.type === 'claude') ? 'Claude' : 'Gemini';
+               const toastMsg = (saved.type === 'claude')
+                 ? `📋 Đã copy bài luận (${saved.model || ''}) và mở Claude...`
+                 : `📋 Đã copy quẻ thô và mở Gemini...`;
                SapoAuto_v1.utils.toast(toastMsg, "success");
                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
                  chrome.runtime.sendMessage({ 
-                   action: saved.type === 'claude' ? 'openClaudeDirectPopup' : 'openGeminiPopup',
+                   action: popupAction,
                    conversationId: SapoAuto_v1.utils.getActiveConversationId()
                  });
                }
-               btn.textContent = originalText || "Luận";
+               btn.textContent = originalText || (btnType === 'chu' ? "Khác" : "Gemini");
                btn.style.background = "";
                btn.style.color = "";
                btn.disabled = false;
                if (typeof originalOnClick === 'function') {
                  btn.onclick = originalOnClick;
                }
-               localStorage.removeItem("sa_res_" + serial);
+               localStorage.removeItem(specificKey);
                if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-                 chrome.storage.local.remove("sa_res_" + serial);
+                 chrome.storage.local.remove([specificKey]);
                }
+               // Đồng bộ lại trạng thái nếu nút còn lại đang chạy ngầm
+               SapoAuto_v1.ui.applyRunningState(btn, serial, btnType);
              } catch (err) {
                SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
              }
@@ -708,27 +717,40 @@ try {
         } catch(e) {}
       },
 
-      applyRunningState(btn, serial) {
+      applyRunningState(btn, serial, btnType = 'luan') {
         try {
           const raw = localStorage.getItem("sa_running_" + serial);
-          if (raw) {
-            const run = JSON.parse(raw);
+          const handleRunInfo = (run) => {
             if (run && run.startTime && (Date.now() - run.startTime < 120000)) {
-              btn.textContent = "⌛...";
-              btn.disabled = true;
-              return;
+              if (run.triggerSource === btnType) {
+                btn.textContent = "⌛...";
+                btn.disabled = true;
+                btn.style.opacity = "1";
+              } else {
+                // Khóa tương hỗ nút còn lại trên cùng quẻ (kể cả khi đang là nút Copy)
+                btn.disabled = true;
+                btn.style.opacity = "0.5";
+                btn.title = "Quẻ đang được luận ở nút còn lại, tạm khóa...";
+              }
             } else {
               localStorage.removeItem("sa_running_" + serial);
+              if (btn.textContent !== "⌛...") {
+                btn.disabled = false;
+                btn.style.opacity = "1";
+                btn.removeAttribute("title");
+              }
             }
+          };
+
+          if (raw) {
+            handleRunInfo(JSON.parse(raw));
+            return;
           }
           // Thử sync từ chrome.storage.local
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.get(["sa_running_" + serial], (res) => {
               const r = res?.[("sa_running_" + serial)];
-              if (r && r.startTime && (Date.now() - r.startTime < 120000)) {
-                btn.textContent = "⌛...";
-                btn.disabled = true;
-              }
+              if (r) handleRunInfo(r);
             });
           }
         } catch(e) {}
@@ -939,11 +961,11 @@ try {
           const btnC = document.createElement("button");
           btnC.className = "sa-mini-btn btn-c";
           btnC.dataset.serial = val;
-          btnC.textContent = "Luận";
-          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim(), questionInput); };
+          btnC.textContent = "Gemini";
+          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim(), questionInput, 'luan'); };
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
-          self.ui.applySavedState(btnC, val, "Luận", btnC.onclick);
-          self.ui.applyRunningState(btnC, val);
+          self.ui.applySavedState(btnC, val, "Gemini", btnC.onclick, 'luan');
+          self.ui.applyRunningState(btnC, val, 'luan');
           actionGroup.appendChild(btnC);
 
           const btnResetHist = document.createElement("button");
@@ -965,9 +987,11 @@ try {
           const btnTxtOnly = document.createElement("button");
           btnTxtOnly.className = "sa-mini-btn btn-c-only";
           btnTxtOnly.dataset.serial = val;
-          btnTxtOnly.textContent = "Chữ";
-          btnTxtOnly.onclick = (e) => { stopAll(e); self.textScan.runPopupTextOnly(val, btnTxtOnly, getPickerDate()); };
+          btnTxtOnly.textContent = "Khác";
+          btnTxtOnly.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnTxtOnly, getPickerDate(), questionInput.value.trim(), questionInput, 'chu'); };
           btnTxtOnly.onmousedown = stopAll; btnTxtOnly.onmouseup = stopAll;
+          self.ui.applySavedState(btnTxtOnly, val, "Khác", btnTxtOnly.onclick, 'chu');
+          self.ui.applyRunningState(btnTxtOnly, val, 'chu');
           actionGroup.appendChild(btnTxtOnly);
 
           const btnX = document.createElement("button");
@@ -1073,10 +1097,10 @@ try {
         const btnTxt = document.createElement("button");
         btnTxt.className = "sa-text-btn btn-txt";
         btnTxt.dataset.serial = numOnly;
-        btnTxt.textContent = "Luận";
-        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim(), questionInput);
-        self.ui.applySavedState(btnTxt, numOnly, "Luận", btnTxt.onclick);
-        self.ui.applyRunningState(btnTxt, numOnly);
+        btnTxt.textContent = "Gemini";
+        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim(), questionInput, 'luan');
+        self.ui.applySavedState(btnTxt, numOnly, "Gemini", btnTxt.onclick, 'luan');
+        self.ui.applyRunningState(btnTxt, numOnly, 'luan');
         badge.appendChild(btnTxt);
 
         const btnResetHist = document.createElement("button");
@@ -1098,10 +1122,12 @@ try {
         const btnTxtOnly = document.createElement("button");
         btnTxtOnly.className = "sa-text-btn btn-txt-only";
         btnTxtOnly.dataset.serial = numOnly;
-        btnTxtOnly.textContent = "Chữ";
-        btnTxtOnly.onclick = () => self.textScan.runPopupTextOnly(numOnly, btnTxtOnly, getPickerDate());
+        btnTxtOnly.textContent = "Khác";
+        btnTxtOnly.onclick = () => self.textScan.runPopup(numOnly, btnTxtOnly, getPickerDate(), questionInput.value.trim(), questionInput, 'chu');
         btnTxtOnly.onmousedown = (e) => e.stopPropagation();
         btnTxtOnly.onmouseup = (e) => e.stopPropagation();
+        self.ui.applySavedState(btnTxtOnly, numOnly, "Khác", btnTxtOnly.onclick, 'chu');
+        self.ui.applyRunningState(btnTxtOnly, numOnly, 'chu');
         badge.appendChild(btnTxtOnly);
 
         container.appendChild(badge);
@@ -1293,18 +1319,43 @@ try {
         }, 40000);
       },
 
-      async runPopup(serial, btn, date, question = "", inputEl = null) {
+      async runPopup(serial, btn, date, question = "", inputEl = null, triggerSource = 'luan') {
         const self = SapoAuto_v1;
-        const originalText = (btn && (btn.classList.contains("btn-txt-only") || btn.classList.contains("btn-c-only"))) ? "Chữ" : "Luận";
+        const originalText = (triggerSource === 'chu') ? "Khác" : "Gemini";
+
+        // 1. Kiểm tra chống xung đột (Mutex Lock): Nếu quẻ này đang chạy, không cho kích hoạt tiếp
+        const runningRaw = localStorage.getItem("sa_running_" + serial);
+        if (runningRaw) {
+          try {
+            const r = JSON.parse(runningRaw);
+            if (r && r.startTime && (Date.now() - r.startTime < 120000)) {
+              self.utils.toast(`⏳ [${serial}] Quẻ này đang được luận, vui lòng đợi xong!`, "warning");
+              return;
+            }
+          } catch(e) {}
+        }
+
         // Bắt tên khách hàng NGAY GIÂY PHÚT BẤM NÚT LUẬN (tránh bị lệch khi người dùng đổi tab chat)
         const capturedCustomerName = self.aiService.conversationHistory._getCustomerName();
         if (btn) {
           btn.textContent = "⌛...";
           btn.disabled = true;
+          btn.style.opacity = "1";
         }
 
-        // Đánh dấu đang chạy ngầm trong cả localStorage và chrome.storage.local (kèm timestamp)
-        const runInfo = { startTime: Date.now(), customerName: capturedCustomerName };
+        // 2. Khóa tương hỗ nút còn lại trên cùng quẻ để chống người dùng bấm đè 2 nút cùng lúc (kể cả khi đang là nút Copy)
+        const otherSelector = (triggerSource === 'chu')
+          ? `.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`
+          : `.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`;
+        const otherBtns = document.querySelectorAll(otherSelector);
+        otherBtns.forEach(b => {
+          b.disabled = true;
+          b.style.opacity = "0.5";
+          b.title = "Đang luận quẻ, tạm khóa nút này để chống xung đột...";
+        });
+
+        // Đánh dấu đang chạy ngầm trong cả localStorage và chrome.storage.local (kèm timestamp và triggerSource)
+        const runInfo = { startTime: Date.now(), customerName: capturedCustomerName, triggerSource };
         try {
           localStorage.setItem("sa_running_" + serial, JSON.stringify(runInfo));
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
@@ -1314,7 +1365,7 @@ try {
 
         const convId = self.utils.getActiveConversationId();
         const dateObj = date ? { year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate(), hour: date.getHours(), min: date.getMinutes() } : null;
-        const currentModel = self.aiService.model || "Gemini";
+        const currentModel = (triggerSource === 'chu') ? "Model Phụ (GLM/Trung gian)" : (self.aiService.model || "Gemini");
 
         self.utils.toast(`⌛ [${capturedCustomerName || serial}] Đang gọi AI (${currentModel})...`, "info");
 
@@ -1326,14 +1377,15 @@ try {
             date: dateObj,
             question,
             customerName: capturedCustomerName,
-            conversationId: convId
+            conversationId: convId,
+            triggerSource
           });
         }
       },
 
       async runPopupTextOnly(serial, btn, date) {
         const self = SapoAuto_v1;
-        const originalText = "Chữ";
+        const originalText = "Khác";
         if (btn) {
           btn.textContent = "⌛...";
           btn.disabled = true;
@@ -1410,6 +1462,13 @@ try {
           if (k.startsWith("sa_loading_")) {
             localStorage.removeItem(k);
           }
+          // Dọn dẹp các key sa_res_ cũ của phiên bản trước (chống hiển thị chéo)
+          if (k.startsWith("sa_res_") && !k.startsWith("sa_res_luan_") && !k.startsWith("sa_res_chu_")) {
+            localStorage.removeItem(k);
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              chrome.storage.local.remove(k);
+            }
+          }
         });
       } catch(e) {}
 
@@ -1423,12 +1482,35 @@ try {
                 if (!run.startTime || Date.now() - run.startTime > 120000) {
                   localStorage.removeItem(k);
                   const serial = k.replace("sa_running_", "");
-                  const allBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-                  allBtns.forEach(b => {
-                    b.textContent = "Luận";
-                    b.disabled = false;
-                    b.style.background = "";
-                    b.style.color = "";
+                  const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+                  luanBtns.forEach(b => {
+                    if (b.textContent === "Copy") {
+                      b.disabled = false;
+                      b.style.opacity = "1";
+                      b.removeAttribute("title");
+                    } else {
+                      b.textContent = "Gemini";
+                      b.disabled = false;
+                      b.style.opacity = "1";
+                      b.style.background = "";
+                      b.style.color = "";
+                      b.removeAttribute("title");
+                    }
+                  });
+                  const chuBtns = document.querySelectorAll(`.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`);
+                  chuBtns.forEach(b => {
+                    if (b.textContent === "Copy") {
+                      b.disabled = false;
+                      b.style.opacity = "1";
+                      b.removeAttribute("title");
+                    } else {
+                      b.textContent = "Khác";
+                      b.disabled = false;
+                      b.style.opacity = "1";
+                      b.style.background = "";
+                      b.style.color = "";
+                      b.removeAttribute("title");
+                    }
                   });
                   if (typeof chrome !== "undefined" && chrome?.storage?.local) {
                     chrome.storage.local.remove("sa_running_" + serial);
@@ -1447,33 +1529,83 @@ try {
             const { customerName, message } = msg;
             self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
           } else if (msg.action === 'AI_QUE_COMPLETED') {
-            const { serial, type, content, customerName, model } = msg;
+            const { serial, type, content, customerName, model, triggerSource = 'luan' } = msg;
+            const resKey = `sa_res_${triggerSource}_${serial}`;
             try {
-              localStorage.setItem("sa_res_" + serial, JSON.stringify({ type, content }));
+              localStorage.setItem(resKey, JSON.stringify({ type, content, model, triggerSource }));
               localStorage.removeItem("sa_running_" + serial);
             } catch(e) {}
 
-            // Cập nhật tất cả các nút trùng serial trên màn hình hiện tại
-            const allBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-            allBtns.forEach(b => {
-              self.ui.applySavedState(b, serial, "Luận", b.onclick);
+            if (triggerSource === 'chu') {
+              // Cập nhật nút Khác thành Copy (Xanh nếu thành công, Vàng nếu fallback)
+              const chuBtns = document.querySelectorAll(`.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`);
+              chuBtns.forEach(b => {
+                self.ui.applySavedState(b, serial, "Khác", b.onclick, 'chu');
+              });
+              // Mở khóa lại nút Gemini (dù là nút Gemini gốc hay nút Copy đều mở khóa)
+              const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+              luanBtns.forEach(b => {
+                b.disabled = false;
+                b.style.opacity = "1";
+                b.removeAttribute("title");
+              });
+            } else {
+              // Cập nhật nút Gemini thành Copy (Xanh nếu thành công, Vàng nếu fallback)
+              const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+              luanBtns.forEach(b => {
+                self.ui.applySavedState(b, serial, "Gemini", b.onclick, 'luan');
+              });
+              // Mở khóa lại nút Khác (dù là nút Khác gốc hay nút Copy đều mở khóa)
+              const chuBtns = document.querySelectorAll(`.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`);
+              chuBtns.forEach(b => {
+                b.disabled = false;
+                b.style.opacity = "1";
+                b.removeAttribute("title");
+              });
+            }
+
+            const modelTag = model ? ` (${model})` : '';
+            if (type === 'claude') {
+              self.utils.toast(`✅ [${customerName || serial}] ĐÃ LUẬN XONG${modelTag}! Bấm Copy để mở Claude.`, "success", 5000);
+            } else {
+              self.utils.toast(`⚠️ [${customerName || serial}] AI quá tải/lỗi! Đã lấy quẻ thô, bấm Copy để mở Gemini web.`, "warning", 5000);
+            }
+          } else if (msg.action === 'AI_QUE_FAILED') {
+            const { serial, error, customerName, triggerSource = 'luan' } = msg;
+            try {
+              localStorage.removeItem("sa_running_" + serial);
+            } catch(e) {}
+
+            const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+            luanBtns.forEach(b => {
+              if (b.textContent === "Copy") {
+                b.disabled = false;
+                b.style.opacity = "1";
+                b.removeAttribute("title");
+              } else {
+                b.textContent = "Gemini";
+                b.disabled = false;
+                b.style.opacity = "1";
+                b.style.background = "";
+                b.style.color = "";
+                b.removeAttribute("title");
+              }
             });
 
-            const toastType = type === 'claude' ? 'Claude' : 'Gemini';
-            const modelTag = model ? ` (${model})` : '';
-            self.utils.toast(`✅ [${customerName || serial}] ĐÃ LUẬN XONG${modelTag}! Bấm Copy để mở ${toastType}.`, "success", 5000);
-          } else if (msg.action === 'AI_QUE_FAILED') {
-            const { serial, error, customerName } = msg;
-            try {
-              localStorage.removeItem("sa_running_" + serial);
-            } catch(e) {}
-
-            const allBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-            allBtns.forEach(b => {
-              b.textContent = "Luận";
-              b.disabled = false;
-              b.style.background = "";
-              b.style.color = "";
+            const chuBtns = document.querySelectorAll(`.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`);
+            chuBtns.forEach(b => {
+              if (b.textContent === "Copy") {
+                b.disabled = false;
+                b.style.opacity = "1";
+                b.removeAttribute("title");
+              } else {
+                b.textContent = "Khác";
+                b.disabled = false;
+                b.style.opacity = "1";
+                b.style.background = "";
+                b.style.color = "";
+                b.removeAttribute("title");
+              }
             });
 
             self.utils.toast(`❌ [${customerName || serial}] Lỗi luận quẻ: ${error}`, "error", 5000);
