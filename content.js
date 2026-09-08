@@ -97,7 +97,46 @@ try {
       }
     },
 
-    // 2c. MODULE XỬ LÝ AI (OCR & TEXT GENERATION via Gemini API)
+    // 2c. GIỮ NHỊP TIM CHỐNG SERVICE WORKER NGỦ GẬT (CHROME MV3 KEEP-ALIVE)
+    keepAlive: {
+      activeSerials: new Set(),
+      timer: null,
+      start(serial) {
+        if (serial) this.activeSerials.add(String(serial));
+        if (!this.timer) {
+          this.timer = setInterval(() => {
+            if (this.activeSerials.size === 0) {
+              this.stopAll();
+              return;
+            }
+            try {
+              if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+                chrome.runtime.sendMessage({ 
+                  action: 'KEEP_ALIVE', 
+                  activeCount: this.activeSerials.size 
+                }).catch(() => {});
+              }
+            } catch(e) {}
+          }, 12000);
+        }
+      },
+      stop(serial) {
+        if (serial) this.activeSerials.delete(String(serial));
+        if (this.activeSerials.size === 0 && this.timer) {
+          clearInterval(this.timer);
+          this.timer = null;
+        }
+      },
+      stopAll() {
+        this.activeSerials.clear();
+        if (this.timer) {
+          clearInterval(this.timer);
+          this.timer = null;
+        }
+      }
+    },
+
+    // 2d. MODULE XỬ LÝ AI (OCR & TEXT GENERATION via Gemini API)
     aiService: {
       apiKeys: [],
       model: "gemini-3.5-flash-lite",
@@ -1371,6 +1410,7 @@ try {
 
         // Gửi lệnh xử lý sang Background Service Worker (Không bao giờ bị tắt khi đổi tab hay F5)
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+          self.keepAlive.start(serial);
           chrome.runtime.sendMessage({
             action: 'startAiQue',
             serial,
@@ -1456,6 +1496,9 @@ try {
               const run = JSON.parse(localStorage.getItem(k) || "{}");
               if (!run.startTime || Date.now() - run.startTime > 120000) {
                 localStorage.removeItem(k);
+              } else {
+                const s = k.replace("sa_running_", "");
+                self.keepAlive.start(s);
               }
             } catch(e) { localStorage.removeItem(k); }
           }
@@ -1482,6 +1525,7 @@ try {
                 if (!run.startTime || Date.now() - run.startTime > 120000) {
                   localStorage.removeItem(k);
                   const serial = k.replace("sa_running_", "");
+                  self.keepAlive.stop(serial);
                   const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
                   luanBtns.forEach(b => {
                     if (b.textContent === "Copy") {
@@ -1530,6 +1574,7 @@ try {
             self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
           } else if (msg.action === 'AI_QUE_COMPLETED') {
             const { serial, type, content, customerName, model, triggerSource = 'luan' } = msg;
+            self.keepAlive.stop(serial);
             const resKey = `sa_res_${triggerSource}_${serial}`;
             try {
               localStorage.setItem(resKey, JSON.stringify({ type, content, model, triggerSource }));
@@ -1572,6 +1617,7 @@ try {
             }
           } else if (msg.action === 'AI_QUE_FAILED') {
             const { serial, error, customerName, triggerSource = 'luan' } = msg;
+            self.keepAlive.stop(serial);
             try {
               localStorage.removeItem("sa_running_" + serial);
             } catch(e) {}

@@ -554,6 +554,12 @@ function broadcastMessage(msg) {
 
 // === MESSAGE HANDLER ===
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Nhịp tim chống Service Worker ngủ gật (Keep-Alive từ content.js)
+  if (msg.action === 'KEEP_ALIVE') {
+    sendResponse({ status: 'alive', time: Date.now() });
+    return true;
+  }
+
   // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
   if (msg.action === 'startAiQue') {
     const { serial, date, question, customerName, conversationId, triggerSource = 'luan' } = msg;
