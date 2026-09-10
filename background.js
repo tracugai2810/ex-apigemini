@@ -193,6 +193,32 @@ async function cleanupStaleSessions() {
 chrome.runtime.onInstalled.addListener(() => cleanupStaleSessions());
 chrome.runtime.onStartup.addListener(() => cleanupStaleSessions());
 
+// === CƠ CHẾ GIỮ NHỊP TIM NỘI BỘ TRONG BACKGROUND (CHROME MV3 KEEP-ALIVE) ===
+// Tự động gọi API nhẹ của Chrome mỗi 20s để reset bộ đếm 30s của Service Worker,
+// giúp tác vụ AI chạy bền bỉ không bao giờ bị tắt ngầm kể cả khi user ẩn tab hay chơi game.
+let _bgActiveTasksCount = 0;
+let _bgKeepAliveTimer = null;
+
+function bgStartKeepAlive() {
+  _bgActiveTasksCount++;
+  if (!_bgKeepAliveTimer) {
+    try { chrome.runtime.getPlatformInfo(() => {}); } catch(e) {}
+    _bgKeepAliveTimer = setInterval(() => {
+      try {
+        chrome.runtime.getPlatformInfo(() => {});
+      } catch(e) {}
+    }, 20000);
+  }
+}
+
+function bgStopKeepAlive() {
+  _bgActiveTasksCount = Math.max(0, _bgActiveTasksCount - 1);
+  if (_bgActiveTasksCount === 0 && _bgKeepAliveTimer) {
+    clearInterval(_bgKeepAliveTimer);
+    _bgKeepAliveTimer = null;
+  }
+}
+
 // === BACKGROUND AI QUE SERVICE (CHẠY TRONG SERVICE WORKER ĐỂ KHÔNG BAO GIỜ BỊ NGẮT KHI ĐỔI TAB / F5) ===
 const bgAiService = {
   _cachedKinhDichMd: null,
@@ -394,7 +420,9 @@ const bgAiService = {
   },
 
   async runAiQue({ serial, date, question, customerName, conversationId, triggerSource = 'luan' }) {
-    console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName}, Nguồn: ${triggerSource})`);
+    bgStartKeepAlive();
+    try {
+      console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName}, Nguồn: ${triggerSource})`);
     const settings = await this.getSettings();
     const base = settings.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
     const baseUrl = base.endsWith('/') ? base : base + '/';
@@ -539,7 +567,10 @@ const bgAiService = {
       });
       return { success: true, type: 'gemini', content: copyText, triggerSource };
     }
+  } finally {
+    bgStopKeepAlive();
   }
+}
 };
 
 function broadcastMessage(msg) {
@@ -554,12 +585,6 @@ function broadcastMessage(msg) {
 
 // === MESSAGE HANDLER ===
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Nhịp tim chống Service Worker ngủ gật (Keep-Alive từ content.js)
-  if (msg.action === 'KEEP_ALIVE') {
-    sendResponse({ status: 'alive', time: Date.now() });
-    return true;
-  }
-
   // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
   if (msg.action === 'startAiQue') {
     const { serial, date, question, customerName, conversationId, triggerSource = 'luan' } = msg;
