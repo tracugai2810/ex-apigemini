@@ -12,6 +12,8 @@ const DEFAULTS = {
   geminiApiKey:    '',
   geminiModel:     'gemini-3.7-flash',
   geminiCustomModel: '',
+  customGeminiModels: [],
+  hiddenBuiltinModels: [],
   syncSheetUrl:    '',
   gasBankingUrl:   '',
   customAiBaseUrl: 'https://api.z.ai/api/paas/v4',
@@ -37,6 +39,21 @@ const DEFAULTS = {
   queProvider:     'gemini'
 };
 
+// Danh sách model Gemini mặc định (built-in) — giữ nguyên thứ tự
+const BUILTIN_MODELS = [
+  { value: 'gemini-3.7-flash', label: '🌟 Gemini 3.7 Flash — Mới nhất' },
+  { value: 'gemini-3.5-flash-lite', label: '🏆 Gemini 3.5 Flash Lite — 500 lượt/ngày' },
+  { value: 'gemini-3.1-flash-lite', label: '🏆 Gemini 3.1 Flash Lite — 500 lượt/ngày' },
+  { value: 'gemini-3.6-flash', label: '⚡ Gemini 3.6 Flash — 20 lượt/ngày' },
+  { value: 'gemini-3.5-flash', label: '🔵 Gemini 3.5 Flash — 20 lượt/ngày' },
+  { value: 'gemini-3-flash', label: '🟢 Gemini 3 Flash — 20 lượt/ngày' },
+  { value: 'gemini-2.5-flash-lite', label: '⚡ Gemini 2.5 Flash Lite — 20 lượt/ngày' },
+  { value: 'gemini-2.5-flash', label: '🔷 Gemini 2.5 Flash — 20 lượt/ngày' },
+];
+
+let customGeminiModels = [];
+let hiddenBuiltinModels = [];
+
 const ids = Object.keys(DEFAULTS);
 const els = {};
 ids.forEach(id => { els[id] = document.getElementById(id); });
@@ -48,17 +65,153 @@ function showStatus(msg) {
   setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
 }
 
-function updateCustomModelVisibility() {
-  const modelSelect = els.geminiModel;
-  const customGroup = document.getElementById('customModelGroup');
-  if (modelSelect && customGroup) {
-    if (modelSelect.value === 'custom') {
-      customGroup.style.display = 'block';
-    } else {
-      customGroup.style.display = 'none';
+// ============================
+// === Model Dropdown Logic ===
+// ============================
+
+function getVisibleModels() {
+  const visibleBuiltIn = BUILTIN_MODELS.filter(m => !hiddenBuiltinModels.includes(m.value));
+  return [...visibleBuiltIn, ...customGeminiModels];
+}
+
+function findModelLabel(value) {
+  const allModels = [...BUILTIN_MODELS, ...customGeminiModels];
+  const found = allModels.find(m => m.value === value);
+  return found ? found.label : value;
+}
+
+function renderModelDropdown(selectedValue) {
+  const listEl = document.getElementById('modelDropdownList');
+  const labelEl = document.getElementById('modelDropdownLabel');
+  if (!listEl || !labelEl) return;
+
+  // Xóa items cũ (giữ lại .model-add-row ở cuối)
+  listEl.querySelectorAll('.model-dropdown-item').forEach(el => el.remove());
+
+  const addRow = listEl.querySelector('.model-add-row');
+  const allModels = getVisibleModels();
+
+  allModels.forEach(m => {
+    const item = document.createElement('div');
+    item.className = 'model-dropdown-item' + (m.value === selectedValue ? ' selected' : '');
+    item.dataset.value = m.value;
+
+    const label = document.createElement('span');
+    label.className = 'model-item-label';
+    label.textContent = m.label;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'model-delete-btn';
+    deleteBtn.title = 'Xóa model này';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteModel(m.value);
+    });
+
+    item.appendChild(label);
+    item.appendChild(deleteBtn);
+    item.addEventListener('click', () => selectModel(m.value, m.label));
+
+    listEl.insertBefore(item, addRow);
+  });
+
+  // Cập nhật label trên toggle button
+  labelEl.textContent = findModelLabel(selectedValue);
+}
+
+function selectModel(value, label) {
+  els.geminiModel.value = value;
+  const labelEl = document.getElementById('modelDropdownLabel');
+  if (labelEl) labelEl.textContent = label;
+  const listEl = document.getElementById('modelDropdownList');
+  if (listEl) listEl.style.display = 'none';
+  renderModelDropdown(value);
+}
+
+function deleteModel(value) {
+  const allModels = getVisibleModels();
+
+  if (allModels.length <= 1) {
+    showStatus('❌ Cần giữ lại ít nhất 1 model!');
+    return;
+  }
+
+  const isBuiltIn = BUILTIN_MODELS.some(m => m.value === value);
+  if (isBuiltIn) {
+    if (!hiddenBuiltinModels.includes(value)) {
+      hiddenBuiltinModels.push(value);
+    }
+  } else {
+    customGeminiModels = customGeminiModels.filter(m => m.value !== value);
+  }
+
+  // Nếu model bị xóa đang được chọn → chuyển sang model đầu tiên còn lại
+  let currentSelected = els.geminiModel.value;
+  if (currentSelected === value) {
+    const remaining = getVisibleModels();
+    if (remaining.length > 0) {
+      currentSelected = remaining[0].value;
+      els.geminiModel.value = currentSelected;
     }
   }
+
+  // Lưu ngay vào storage (đồng bộ qua Google Account)
+  chrome.storage.sync.set({
+    customGeminiModels: customGeminiModels,
+    hiddenBuiltinModels: hiddenBuiltinModels,
+    geminiModel: currentSelected
+  }, () => showStatus('🗑️ Đã xóa model'));
+
+  renderModelDropdown(currentSelected);
 }
+
+function addCustomModel() {
+  const input = document.getElementById('addCustomModelInput');
+  if (!input) return;
+  const modelName = input.value.trim();
+
+  if (!modelName) {
+    showStatus('❌ Vui lòng nhập tên model!');
+    return;
+  }
+
+  // Kiểm tra trùng lặp
+  const isBuiltIn = BUILTIN_MODELS.some(m => m.value === modelName);
+  const isCustomExists = customGeminiModels.some(m => m.value === modelName);
+
+  if (isBuiltIn) {
+    // Nếu là model built-in bị ẩn → bỏ ẩn
+    hiddenBuiltinModels = hiddenBuiltinModels.filter(v => v !== modelName);
+  } else if (!isCustomExists) {
+    // Thêm model mới vào danh sách custom
+    customGeminiModels.push({ value: modelName, label: '✏️ ' + modelName });
+  } else {
+    // Model đã tồn tại → chỉ chọn nó
+    showStatus('⚠️ Model này đã tồn tại trong danh sách!');
+    selectModel(modelName, findModelLabel(modelName));
+    input.value = '';
+    return;
+  }
+
+  // Chọn model vừa thêm
+  els.geminiModel.value = modelName;
+  input.value = '';
+
+  // Lưu vào storage (đồng bộ qua Google Account)
+  chrome.storage.sync.set({
+    customGeminiModels: customGeminiModels,
+    hiddenBuiltinModels: hiddenBuiltinModels,
+    geminiModel: modelName
+  }, () => showStatus('✅ Đã thêm model: ' + modelName));
+
+  renderModelDropdown(modelName);
+}
+
+// ================================
+// === Profile Functions (giữ nguyên) ===
+// ================================
 
 let currentProfiles = [
   {
@@ -120,6 +273,10 @@ function applyProfileToForm(profile) {
   if (els.customAiModel) els.customAiModel.value = profile.model || '';
 }
 
+// ============================
+// === Load / Save Settings ===
+// ============================
+
 function loadSettings() {
   chrome.storage.sync.get(DEFAULTS, (data) => {
     ids.forEach(id => {
@@ -128,21 +285,36 @@ function loadSettings() {
       else els[id].value = data[id];
     });
 
-    // Gemini model: detect custom
-    const modelSelect = els.geminiModel;
-    const customInput = els.geminiCustomModel;
-    if (modelSelect && customInput) {
-      const isKnownOption = Array.from(modelSelect.options).some(opt => opt.value === data.geminiModel && opt.value !== 'custom');
-      if (data.geminiModel && !isKnownOption) {
-        modelSelect.value = 'custom';
-        customInput.value = data.geminiModel;
-      } else if (modelSelect.value === 'custom') {
-        customInput.value = data.geminiCustomModel || '';
-      }
+    // === Gemini Model Dropdown ===
+    // Backward compat: nếu geminiModel cũ là 'custom', dùng geminiCustomModel làm model thực
+    let currentModel = data.geminiModel || 'gemini-3.7-flash';
+    if (currentModel === 'custom' && data.geminiCustomModel) {
+      currentModel = data.geminiCustomModel;
     }
-    updateCustomModelVisibility();
 
-    // Model Phụ: Nạp danh sách Profiles (Bộ URL + Key + Model)
+    // Load danh sách custom models và hidden built-in models từ storage
+    customGeminiModels = Array.isArray(data.customGeminiModels) ? [...data.customGeminiModels] : [];
+    hiddenBuiltinModels = Array.isArray(data.hiddenBuiltinModels) ? [...data.hiddenBuiltinModels] : [];
+
+    // Nếu model hiện tại không nằm trong bất kỳ danh sách nào → tự động thêm vào custom
+    const isBuiltIn = BUILTIN_MODELS.some(m => m.value === currentModel);
+    const isCustom = customGeminiModels.some(m => m.value === currentModel);
+    if (!isBuiltIn && !isCustom && currentModel) {
+      customGeminiModels.push({ value: currentModel, label: '✏️ ' + currentModel });
+    }
+
+    // Nếu model hiện tại là built-in nhưng bị ẩn → tự bỏ ẩn (vì đang dùng)
+    if (isBuiltIn && hiddenBuiltinModels.includes(currentModel)) {
+      hiddenBuiltinModels = hiddenBuiltinModels.filter(v => v !== currentModel);
+    }
+
+    // Cập nhật hidden input value
+    els.geminiModel.value = currentModel;
+
+    // Render custom dropdown
+    renderModelDropdown(currentModel);
+
+    // === Model Phụ: Nạp danh sách Profiles (Bộ URL + Key + Model) ===
     let profiles = data.customAiProfiles;
     if (!Array.isArray(profiles) || profiles.length === 0) {
       profiles = [
@@ -196,16 +368,8 @@ function saveSettings() {
 
   if (gW < 400 || gH < 300 || cW < 400 || cH < 300 || bW < 400 || bH < 300) { showStatus('❌ Kích thước tối thiểu: 400×300'); return; }
 
-  let selectedModel = els.geminiModel ? els.geminiModel.value : 'gemini-3.7-flash';
-  const customModelVal = els.geminiCustomModel ? els.geminiCustomModel.value.trim() : '';
-
-  if (selectedModel === 'custom') {
-    if (!customModelVal) {
-      showStatus('❌ Vui lòng nhập tên model tùy chỉnh!');
-      return;
-    }
-    selectedModel = customModelVal;
-  }
+  // geminiModel giờ là hidden input, luôn chứa tên model thật (VD: "gemini-3.7-flash")
+  const selectedModel = els.geminiModel ? els.geminiModel.value : 'gemini-3.7-flash';
 
   const customAiBaseUrlVal = (els.customAiBaseUrl ? els.customAiBaseUrl.value : '').trim();
   const customAiApiKeyVal = (els.customAiApiKey ? els.customAiApiKey.value : '').trim();
@@ -233,7 +397,9 @@ function saveSettings() {
     luchaoUrl: lUrl,
     geminiApiKey: (els.geminiApiKey.value || '').trim(),
     geminiModel: selectedModel,
-    geminiCustomModel: customModelVal,
+    geminiCustomModel: '',
+    customGeminiModels: customGeminiModels,
+    hiddenBuiltinModels: hiddenBuiltinModels,
     syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : ''),
     gasBankingUrl: (els.gasBankingUrl ? els.gasBankingUrl.value.trim() : ''),
     customAiBaseUrl: customAiBaseUrlVal,
@@ -249,9 +415,50 @@ function resetSettings() {
   chrome.storage.sync.set(DEFAULTS, () => { loadSettings(); showStatus('↩ Đã khôi phục mặc định'); });
 }
 
-if (els.geminiModel) {
-  els.geminiModel.addEventListener('change', updateCustomModelVisibility);
+// =====================================
+// === Event Listeners: Model Dropdown ===
+// =====================================
+
+// Toggle dropdown mở/đóng
+const modelToggleEl = document.getElementById('modelDropdownToggle');
+if (modelToggleEl) {
+  modelToggleEl.addEventListener('click', () => {
+    const listEl = document.getElementById('modelDropdownList');
+    if (listEl) {
+      listEl.style.display = listEl.style.display === 'none' ? 'block' : 'none';
+    }
+  });
 }
+
+// Đóng dropdown khi click ra ngoài
+document.addEventListener('click', (e) => {
+  const container = document.getElementById('modelDropdownContainer');
+  const listEl = document.getElementById('modelDropdownList');
+  if (container && listEl && !container.contains(e.target)) {
+    listEl.style.display = 'none';
+  }
+});
+
+// Nút ➕ Thêm model
+const btnAddModel = document.getElementById('btnAddCustomModel');
+if (btnAddModel) {
+  btnAddModel.addEventListener('click', addCustomModel);
+}
+
+// Enter key trên ô input thêm model
+const addModelInput = document.getElementById('addCustomModelInput');
+if (addModelInput) {
+  addModelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addCustomModel();
+    }
+  });
+}
+
+// =========================================
+// === Event Listeners: Profile Select ===
+// =========================================
 
 // Khi chuyển đổi Cấu hình trong dropdown
 const selProfile = document.getElementById('customProfileSelect');
@@ -339,7 +546,7 @@ if (btnDelProfile) {
   });
 }
 
+// === Init ===
 document.getElementById('btnSave').addEventListener('click', saveSettings);
 document.getElementById('btnReset').addEventListener('click', resetSettings);
 loadSettings();
-
