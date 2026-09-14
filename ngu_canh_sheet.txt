@@ -79,8 +79,13 @@ function doGet(e) {
       } catch(eJson) {}
 
       if (newSummaryObj) {
-        existingSummaries.push(newSummaryObj);
-        if (existingSummaries.length > 3) existingSummaries = existingSummaries.slice(-3);
+        // Kiểm tra chống trùng: Nếu tóm tắt mới trùng với tóm tắt cuối cùng của convId này thì bỏ qua
+        const lastSummary = existingSummaries[existingSummaries.length - 1];
+        const lastText = typeof lastSummary === 'string' ? lastSummary : lastSummary?.text;
+        if (!lastText || lastText.trim() !== newSummaryObj.text.trim()) {
+          existingSummaries.push(newSummaryObj);
+          if (existingSummaries.length > 3) existingSummaries = existingSummaries.slice(-3);
+        }
       }
 
       const finalJsonData = JSON.stringify(existingSummaries);

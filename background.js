@@ -267,7 +267,8 @@ const bgAiService = {
   async fetchSheet(syncSheetUrl, params) {
     if (!syncSheetUrl) return null;
     const url = syncSheetUrl + '?' + new URLSearchParams(params).toString();
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    const maxAttempts = (params && params.action === 'save') ? 1 : 2; // Lưu chỉ gửi 1 lần (tránh ghi đúp khi mạng Google redirect chậm), Đọc thử 2 lần
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout để Apps Script kịp ghi Sheet
@@ -277,8 +278,8 @@ const bgAiService = {
         const data = await res.json();
         return data;
       } catch(e) {
-        console.warn(`[SA-BG] Lỗi kết nối Google Sheet (lần ${attempt}/2):`, e.message);
-        if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+        console.warn(`[SA-BG] Lỗi kết nối Google Sheet (lần ${attempt}/${maxAttempts}):`, e.message);
+        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 1000));
       }
     }
     return null;

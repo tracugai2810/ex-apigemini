@@ -140,7 +140,7 @@ try {
           await this._ensureUrl();
           if (!this._sheetUrl) return null;
           const url = this._sheetUrl + '?' + new URLSearchParams(params).toString();
-          const maxRetries = 2; // Thử tối đa 2 lần
+          const maxRetries = (params && params.action === 'save') ? 1 : 2; // Lưu gửi 1 lần tránh ghi trùng, Đọc thử 2 lần
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
               const controller = new AbortController();
