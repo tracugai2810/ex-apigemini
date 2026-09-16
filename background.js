@@ -420,10 +420,10 @@ const bgAiService = {
     }
   },
 
-  async runAiQue({ serial, date, question, customerName, conversationId, triggerSource = 'luan' }) {
+  async runAiQue({ serial, date, tz = '+07:00', question, customerName, conversationId, triggerSource = 'luan' }) {
     bgStartKeepAlive();
     try {
-      console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName}, Nguồn: ${triggerSource})`);
+      console.log(`[SA-BG] Bắt đầu chạy tiến trình Luận quẻ ngầm cho Serial: ${serial} (Khách: ${customerName}, Nguồn: ${triggerSource}, Múi giờ: ${tz})`);
     const settings = await this.getSettings();
     const base = settings.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
     const baseUrl = base.endsWith('/') ? base : base + '/';
@@ -442,6 +442,9 @@ const bgAiService = {
 
     // 1. Lập quẻ
     let apiUrl = `${baseUrl}api/lap-que?serial=${serial}`;
+    if (tz) {
+      apiUrl += `&tz=${encodeURIComponent(tz)}`;
+    }
     if (date) {
       const p = n => String(n).padStart(2, "0");
       apiUrl += `&sa_date=${date.year}-${p(date.month)}-${p(date.day)}&sa_hour=${date.hour}&sa_minute=${date.min}`;
@@ -588,12 +591,12 @@ function broadcastMessage(msg) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
   if (msg.action === 'startAiQue') {
-    const { serial, date, question, customerName, conversationId, triggerSource = 'luan' } = msg;
+    const { serial, date, tz = '+07:00', question, customerName, conversationId, triggerSource = 'luan' } = msg;
     chrome.storage.local.set({
-      ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '', triggerSource }
+      ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '', triggerSource, tz }
     });
 
-    bgAiService.runAiQue({ serial, date, question, customerName, conversationId, triggerSource })
+    bgAiService.runAiQue({ serial, date, tz, question, customerName, conversationId, triggerSource })
       .catch((err) => {
         console.error('[SA-BG] Lỗi chạy task Luận quẻ:', err);
         chrome.storage.local.remove('sa_running_' + serial);

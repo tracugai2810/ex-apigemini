@@ -32,6 +32,18 @@ try {
       CLS: { 20000: "btn-20k", 50000: "btn-50k", 500000: "btn-500k" },
       SKIP_W: ["avatar", "emoji", "sticker", "icon", "logo", "favicon", "gravatar", "badge", "sprite", "profile", "gif", "svg"],
       luchaoUrl: "https://dshc-luc-hao.vercel.app/",
+      TIMEZONES: [
+        { label: "VN (+7)", value: "+07:00" },
+        { label: "Mỹ Tây (-8)", value: "-08:00" },
+        { label: "Mỹ Đông (-5)", value: "-05:00" },
+        { label: "Mỹ Trung (-6)", value: "-06:00" },
+        { label: "Mỹ Núi (-7)", value: "-07:00" },
+        { label: "Nhật/Hàn (+9)", value: "+09:00" },
+        { label: "Đài/TQ (+8)", value: "+08:00" },
+        { label: "Úc (+10)", value: "+10:00" },
+        { label: "Châu Âu (+1)", value: "+01:00" },
+        { label: "Anh (UTC 0)", value: "+00:00" }
+      ],
       API: {
         LOCATION_ID: 885876,
         DEFAULT_TENANT: "janet.mysapo.net",
@@ -932,15 +944,33 @@ try {
           dtPicker.onmousedown = stopAll;
           dtPicker.onkeydown = (e) => e.stopPropagation();
           dtWrap.appendChild(dtPicker);
+
+          const tzSelect = document.createElement("select");
+          tzSelect.className = "sa-tz-select";
+          tzSelect.title = "Múi giờ gieo quẻ (Mặc định VN +7)";
+          self.CONFIG.TIMEZONES.forEach(tz => {
+            const opt = document.createElement("option");
+            opt.value = tz.value;
+            opt.textContent = tz.label;
+            if (tz.value === "+07:00") opt.selected = true;
+            tzSelect.appendChild(opt);
+          });
+          tzSelect.onclick = stopAll;
+          tzSelect.onmousedown = stopAll;
+          tzSelect.onmouseup = stopAll;
+          tzSelect.onkeydown = (e) => e.stopPropagation();
+          dtWrap.appendChild(tzSelect);
+
           actionGroup.appendChild(dtWrap);
 
           const getPickerDate = () => dtPicker.value ? new Date(dtPicker.value) : null;
+          const getPickerTz = () => tzSelect.value || "+07:00";
 
           const btnA = document.createElement("button");
           btnA.className = "sa-mini-btn btn-a";
           btnA.dataset.serial = val;
           btnA.textContent = "Ảnh";
-          btnA.onclick = (e) => { stopAll(e); self.textScan.runImage(val, btnA, getPickerDate()); };
+          btnA.onclick = (e) => { stopAll(e); self.textScan.runImage(val, btnA, getPickerDate(), getPickerTz()); };
           btnA.onmousedown = stopAll; btnA.onmouseup = stopAll;
           self.ui.applySavedStateImage(btnA, val, "Ảnh", btnA.onclick);
           actionGroup.appendChild(btnA);
@@ -962,7 +992,7 @@ try {
           btnC.className = "sa-mini-btn btn-c";
           btnC.dataset.serial = val;
           btnC.textContent = "Gemini";
-          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim(), questionInput, 'luan'); };
+          btnC.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnC, getPickerDate(), questionInput.value.trim(), questionInput, 'luan', getPickerTz()); };
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
           self.ui.applySavedState(btnC, val, "Gemini", btnC.onclick, 'luan');
           self.ui.applyRunningState(btnC, val, 'luan');
@@ -988,7 +1018,7 @@ try {
           btnTxtOnly.className = "sa-mini-btn btn-c-only";
           btnTxtOnly.dataset.serial = val;
           btnTxtOnly.textContent = "Khác";
-          btnTxtOnly.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnTxtOnly, getPickerDate(), questionInput.value.trim(), questionInput, 'chu'); };
+          btnTxtOnly.onclick = (e) => { stopAll(e); self.textScan.runPopup(val, btnTxtOnly, getPickerDate(), questionInput.value.trim(), questionInput, 'chu', getPickerTz()); };
           btnTxtOnly.onmousedown = stopAll; btnTxtOnly.onmouseup = stopAll;
           self.ui.applySavedState(btnTxtOnly, val, "Khác", btnTxtOnly.onclick, 'chu');
           self.ui.applyRunningState(btnTxtOnly, val, 'chu');
@@ -1073,13 +1103,32 @@ try {
         dtInput.onmousedown = (e) => e.stopPropagation();
         dtInput.onkeydown = (e) => e.stopPropagation();
         dtWrap.appendChild(dtInput);
+
+        const tzSelect = document.createElement("select");
+        tzSelect.className = "sa-tz-select";
+        tzSelect.title = "Múi giờ gieo quẻ (Mặc định VN +7)";
+        self.CONFIG.TIMEZONES.forEach(tz => {
+          const opt = document.createElement("option");
+          opt.value = tz.value;
+          opt.textContent = tz.label;
+          if (tz.value === "+07:00") opt.selected = true;
+          tzSelect.appendChild(opt);
+        });
+        tzSelect.onclick = (e) => e.stopPropagation();
+        tzSelect.onmousedown = (e) => e.stopPropagation();
+        tzSelect.onmouseup = (e) => e.stopPropagation();
+        tzSelect.onkeydown = (e) => e.stopPropagation();
+        dtWrap.appendChild(tzSelect);
+
         badge.appendChild(dtWrap);
+
+        const getPickerTz = () => tzSelect.value || "+07:00";
 
         const btnImg = document.createElement("button");
         btnImg.className = "sa-text-btn btn-img";
         btnImg.dataset.serial = numOnly;
         btnImg.textContent = "Ảnh";
-        btnImg.onclick = () => self.textScan.runImage(numOnly, btnImg, getPickerDate());
+        btnImg.onclick = () => self.textScan.runImage(numOnly, btnImg, getPickerDate(), getPickerTz());
         self.ui.applySavedStateImage(btnImg, numOnly, "Ảnh", btnImg.onclick);
         badge.appendChild(btnImg);
 
@@ -1098,7 +1147,7 @@ try {
         btnTxt.className = "sa-text-btn btn-txt";
         btnTxt.dataset.serial = numOnly;
         btnTxt.textContent = "Gemini";
-        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim(), questionInput, 'luan');
+        btnTxt.onclick = () => self.textScan.runPopup(numOnly, btnTxt, getPickerDate(), questionInput.value.trim(), questionInput, 'luan', getPickerTz());
         self.ui.applySavedState(btnTxt, numOnly, "Gemini", btnTxt.onclick, 'luan');
         self.ui.applyRunningState(btnTxt, numOnly, 'luan');
         badge.appendChild(btnTxt);
@@ -1123,7 +1172,7 @@ try {
         btnTxtOnly.className = "sa-text-btn btn-txt-only";
         btnTxtOnly.dataset.serial = numOnly;
         btnTxtOnly.textContent = "Khác";
-        btnTxtOnly.onclick = () => self.textScan.runPopup(numOnly, btnTxtOnly, getPickerDate(), questionInput.value.trim(), questionInput, 'chu');
+        btnTxtOnly.onclick = () => self.textScan.runPopup(numOnly, btnTxtOnly, getPickerDate(), questionInput.value.trim(), questionInput, 'chu', getPickerTz());
         btnTxtOnly.onmousedown = (e) => e.stopPropagation();
         btnTxtOnly.onmouseup = (e) => e.stopPropagation();
         self.ui.applySavedState(btnTxtOnly, numOnly, "Khác", btnTxtOnly.onclick, 'chu');
@@ -1205,11 +1254,14 @@ try {
 
       _cachedKinhDichMd: null,
 
-      buildUrl(serial, date, mode) {
+      buildUrl(serial, date, mode, tz = "+07:00") {
         const base = SapoAuto_v1.CONFIG.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
         const u = new URL(base);
         u.searchParams.set("sa_serial", serial);
         u.searchParams.set("sa_mode", mode || "text");
+        if (tz) {
+          u.searchParams.set("tz", tz);
+        }
         if (date) {
           const p = n => String(n).padStart(2, "0");
           u.searchParams.set("sa_date",   `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}`);
@@ -1219,7 +1271,7 @@ try {
         return u.toString();
       },
 
-      async runImage(serial, btn, date) {
+      async runImage(serial, btn, date, tz = "+07:00") {
         const self = SapoAuto_v1;
         self.utils.toast("⌛ Đang mở cửa sổ lập quẻ...", "info");
         if (btn) {
@@ -1227,7 +1279,7 @@ try {
           btn.disabled = true;
         }
 
-        const url = self.textScan.buildUrl(serial, date, "image");
+        const url = self.textScan.buildUrl(serial, date, "image", tz);
         
         // v1.1: Tạo Popup Tàng hình (Silent Mode)
         const overlay = document.createElement("div");
@@ -1319,7 +1371,7 @@ try {
         }, 40000);
       },
 
-      async runPopup(serial, btn, date, question = "", inputEl = null, triggerSource = 'luan') {
+      async runPopup(serial, btn, date, question = "", inputEl = null, triggerSource = 'luan', tz = "+07:00") {
         const self = SapoAuto_v1;
         const originalText = (triggerSource === 'chu') ? "Khác" : "Gemini";
 
@@ -1355,7 +1407,7 @@ try {
         });
 
         // Đánh dấu đang chạy ngầm trong cả localStorage và chrome.storage.local (kèm timestamp và triggerSource)
-        const runInfo = { startTime: Date.now(), customerName: capturedCustomerName, triggerSource };
+        const runInfo = { startTime: Date.now(), customerName: capturedCustomerName, triggerSource, tz };
         try {
           localStorage.setItem("sa_running_" + serial, JSON.stringify(runInfo));
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
@@ -1375,6 +1427,7 @@ try {
             action: 'startAiQue',
             serial,
             date: dateObj,
+            tz: tz || "+07:00",
             question,
             customerName: capturedCustomerName,
             conversationId: convId,
@@ -1383,7 +1436,7 @@ try {
         }
       },
 
-      async runPopupTextOnly(serial, btn, date) {
+      async runPopupTextOnly(serial, btn, date, tz = "+07:00") {
         const self = SapoAuto_v1;
         const originalText = "Khác";
         if (btn) {
@@ -1396,6 +1449,9 @@ try {
           const base = self.CONFIG.luchaoUrl || "https://dshc-luc-hao.vercel.app/";
           const baseUrl = base.endsWith('/') ? base : base + '/';
           let apiUrl = `${baseUrl}api/lap-que?serial=${serial}`;
+          if (tz) {
+            apiUrl += `&tz=${encodeURIComponent(tz)}`;
+          }
           if (date) {
             const p = n => String(n).padStart(2, "0");
             const saDate = `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}`;
