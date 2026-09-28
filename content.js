@@ -82,7 +82,6 @@ try {
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.set({ [key]: serial });
           }
-          localStorage.setItem(key, serial);
         } catch(e) {}
       },
       load(imgSrc, cb) {
@@ -90,11 +89,10 @@ try {
           const key = this._key(imgSrc);
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.get([key], (res) => {
-              const val = res?.[key] || localStorage.getItem(key) || "";
-              cb(val);
+              cb(res?.[key] || "");
             });
           } else {
-            cb(localStorage.getItem(key) || "");
+            cb("");
           }
         } catch(e) { cb(""); }
       },
@@ -104,7 +102,6 @@ try {
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.remove(key);
           }
-          localStorage.removeItem(key);
         } catch(e) {}
       }
     },
@@ -631,138 +628,122 @@ try {
     // 6. HỆ THỐNG HIỂN THỊ (UI SYSTEM)
     ui: {
       applySavedStateImage(btn, serial, originalText, originalOnClick) {
-        const imageData = localStorage.getItem("sa_img_" + serial);
-        if (!imageData) return;
-        
-        btn.textContent = "OK";
-        btn.disabled = false;
-        btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
-        btn.style.color = "white";
-        btn.style.fontWeight = "bold";
-        btn.style.boxShadow = "0 0 15px rgba(34, 197, 94, 0.6)";
-        btn.style.pointerEvents = "auto";
-        
-        btn.onclick = async (ev) => {
-          ev.preventDefault(); ev.stopPropagation();
-          try {
-            SapoAuto_v1.utils.toast("⌛ Đang copy vào Clipboard...", "info");
-            const blob = SapoAuto_v1.utils.dataURLtoBlob(imageData);
-            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-            SapoAuto_v1.utils.toast("✅ ĐÃ COPY! Bạn có thể Ctrl+V ngay.", "success");
-            btn.textContent = originalText;
-            btn.style.background = "";
-            btn.style.boxShadow = "";
-            btn.style.color = "";
-            btn.style.fontWeight = "";
-            btn.style.pointerEvents = "";
+        const imgKey = "sa_img_" + serial;
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          chrome.storage.local.get([imgKey], (res) => {
+            const imageData = res?.[imgKey];
+            if (!imageData) return;
+            
+            btn.textContent = "OK";
             btn.disabled = false;
-            btn.onclick = originalOnClick;
-            try { localStorage.removeItem("sa_img_" + serial); } catch(e){}
-          } catch (err) { 
-            SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
-          }
-        };
+            btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+            btn.style.color = "white";
+            btn.style.fontWeight = "bold";
+            btn.style.boxShadow = "0 0 15px rgba(34, 197, 94, 0.6)";
+            btn.style.pointerEvents = "auto";
+            
+            btn.onclick = async (ev) => {
+              ev.preventDefault(); ev.stopPropagation();
+              try {
+                SapoAuto_v1.utils.toast("⌛ Đang copy vào Clipboard...", "info");
+                const blob = SapoAuto_v1.utils.dataURLtoBlob(imageData);
+                await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+                SapoAuto_v1.utils.toast("✅ ĐÃ COPY! Bạn có thể Ctrl+V ngay.", "success");
+                btn.textContent = originalText;
+                btn.style.background = "";
+                btn.style.boxShadow = "";
+                btn.style.color = "";
+                btn.style.fontWeight = "";
+                btn.style.pointerEvents = "";
+                btn.disabled = false;
+                btn.onclick = originalOnClick;
+                // Bấm OK copy xong là XÓA NGAY LẬP TỨC KHỎI KHO EXTENSION
+                chrome.storage.local.remove([imgKey]);
+              } catch (err) { 
+                SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
+              }
+            };
+          });
+        }
       },
 
       applySavedState(btn, serial, originalText, originalOnClick, btnType = 'luan') {
         const specificKey = `sa_res_${btnType}_${serial}`;
-        let savedStr = localStorage.getItem(specificKey);
-        if (!savedStr) {
-          // Thử lấy từ chrome.storage.local nếu localStorage chưa kịp ghi
-          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-            chrome.storage.local.get([specificKey], (res) => {
-              const val = res?.[specificKey];
-              if (val) {
-                try {
-                  localStorage.setItem(specificKey, val);
-                  SapoAuto_v1.ui.applySavedState(btn, serial, originalText, originalOnClick, btnType);
-                } catch(e) {}
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          chrome.storage.local.get([specificKey], (res) => {
+            const savedStr = res?.[specificKey];
+            if (!savedStr) return;
+            try {
+              const saved = typeof savedStr === 'string' ? JSON.parse(savedStr) : savedStr;
+              if (!saved || !saved.content) return;
+              btn.textContent = "Copy";
+              btn.disabled = false;
+              btn.style.opacity = "1";
+              if (saved.type === 'claude') {
+                 btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+              } else {
+                 btn.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
               }
-            });
-          }
-          return;
+              btn.style.color = "white";
+              btn.onclick = async (e) => {
+                 e.stopPropagation(); e.preventDefault();
+                 try {
+                   await navigator.clipboard.writeText(saved.content);
+                   const popupAction = (saved.type === 'claude') ? 'openClaudeDirectPopup' : 'openGeminiPopup';
+                   const toastMsg = (saved.type === 'claude')
+                     ? `📋 Đã copy bài luận (${saved.model || ''}) và mở Claude...`
+                     : `📋 Đã copy quẻ thô và mở Gemini...`;
+                   SapoAuto_v1.utils.toast(toastMsg, "success");
+                   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                     chrome.runtime.sendMessage({ 
+                       action: popupAction,
+                       conversationId: SapoAuto_v1.utils.getActiveConversationId()
+                     });
+                   }
+                   btn.textContent = originalText || (btnType === 'chu' ? "Khác" : "Gemini");
+                   btn.style.background = "";
+                   btn.style.color = "";
+                   btn.disabled = false;
+                   if (typeof originalOnClick === 'function') {
+                     btn.onclick = originalOnClick;
+                   }
+                   // Bấm Copy xong là XÓA NGAY LẬP TỨC KHỎI KHO EXTENSION
+                   chrome.storage.local.remove([specificKey]);
+                   // Đồng bộ lại trạng thái nếu nút còn lại đang chạy ngầm
+                   SapoAuto_v1.ui.applyRunningState(btn, serial, btnType);
+                 } catch (err) {
+                   SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
+                 }
+              };
+            } catch(e) {}
+          });
         }
-        try {
-          const saved = JSON.parse(savedStr);
-          btn.textContent = "Copy";
-          btn.disabled = false;
-          btn.style.opacity = "1";
-          if (saved.type === 'claude') {
-             btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
-          } else {
-             btn.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
-          }
-          btn.style.color = "white";
-          btn.onclick = async (e) => {
-             e.stopPropagation(); e.preventDefault();
-             try {
-               await navigator.clipboard.writeText(saved.content);
-               const popupAction = (saved.type === 'claude') ? 'openClaudeDirectPopup' : 'openGeminiPopup';
-               const popupLabel = (saved.type === 'claude') ? 'Claude' : 'Gemini';
-               const toastMsg = (saved.type === 'claude')
-                 ? `📋 Đã copy bài luận (${saved.model || ''}) và mở Claude...`
-                 : `📋 Đã copy quẻ thô và mở Gemini...`;
-               SapoAuto_v1.utils.toast(toastMsg, "success");
-               if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                 chrome.runtime.sendMessage({ 
-                   action: popupAction,
-                   conversationId: SapoAuto_v1.utils.getActiveConversationId()
-                 });
-               }
-               btn.textContent = originalText || (btnType === 'chu' ? "Khác" : "Gemini");
-               btn.style.background = "";
-               btn.style.color = "";
-               btn.disabled = false;
-               if (typeof originalOnClick === 'function') {
-                 btn.onclick = originalOnClick;
-               }
-               localStorage.removeItem(specificKey);
-               if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-                 chrome.storage.local.remove([specificKey]);
-               }
-               // Đồng bộ lại trạng thái nếu nút còn lại đang chạy ngầm
-               SapoAuto_v1.ui.applyRunningState(btn, serial, btnType);
-             } catch (err) {
-               SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
-             }
-          };
-        } catch(e) {}
       },
 
       applyRunningState(btn, serial, btnType = 'luan') {
         try {
-          const raw = localStorage.getItem("sa_running_" + serial);
-          const handleRunInfo = (run) => {
-            if (run && run.startTime && (Date.now() - run.startTime < 120000)) {
-              if (run.triggerSource === btnType) {
-                btn.textContent = "⌛...";
-                btn.disabled = true;
-                btn.style.opacity = "1";
-              } else {
-                // Khóa tương hỗ nút còn lại trên cùng quẻ (kể cả khi đang là nút Copy)
-                btn.disabled = true;
-                btn.style.opacity = "0.5";
-                btn.title = "Quẻ đang được luận ở nút còn lại, tạm khóa...";
-              }
-            } else {
-              localStorage.removeItem("sa_running_" + serial);
-              if (btn.textContent !== "⌛...") {
-                btn.disabled = false;
-                btn.style.opacity = "1";
-                btn.removeAttribute("title");
-              }
-            }
-          };
-
-          if (raw) {
-            handleRunInfo(JSON.parse(raw));
-            return;
-          }
-          // Thử sync từ chrome.storage.local
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.get(["sa_running_" + serial], (res) => {
-              const r = res?.[("sa_running_" + serial)];
-              if (r) handleRunInfo(r);
+              const run = res?.[("sa_running_" + serial)];
+              if (run && run.startTime && (Date.now() - run.startTime < 120000)) {
+                if (run.triggerSource === btnType) {
+                  btn.textContent = "⌛...";
+                  btn.disabled = true;
+                  btn.style.opacity = "1";
+                } else {
+                  // Khóa tương hỗ nút còn lại trên cùng quẻ (kể cả khi đang là nút Copy)
+                  btn.disabled = true;
+                  btn.style.opacity = "0.5";
+                  btn.title = "Quẻ đang được luận ở nút còn lại, tạm khóa...";
+                }
+              } else {
+                if (run) chrome.storage.local.remove("sa_running_" + serial);
+                if (btn.textContent !== "⌛...") {
+                  btn.disabled = false;
+                  btn.style.opacity = "1";
+                  btn.removeAttribute("title");
+                }
+              }
             });
           }
         } catch(e) {}
@@ -980,8 +961,19 @@ try {
           questionInput.className = "sa-question-input";
           questionInput.placeholder = "Nhập câu hỏi...";
           const qKey = "sa_question_serial_" + val;
-          questionInput.value = localStorage.getItem(qKey) || "";
-          questionInput.oninput = (e) => localStorage.setItem(qKey, e.target.value);
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.get([qKey], (res) => {
+              if (res?.[qKey] && !questionInput.value) {
+                questionInput.value = res[qKey];
+              }
+            });
+          }
+          questionInput.oninput = (e) => {
+            const textVal = e.target.value;
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              chrome.storage.local.set({ [qKey]: textVal });
+            }
+          };
           questionInput.onclick = stopAll;
           questionInput.onmousedown = stopAll;
           questionInput.onmouseup = stopAll;
@@ -1137,8 +1129,19 @@ try {
         questionInput.className = "sa-question-input";
         questionInput.placeholder = "Nhập câu hỏi...";
         const qKey = "sa_question_serial_" + numOnly;
-        questionInput.value = localStorage.getItem(qKey) || "";
-        questionInput.oninput = (e) => localStorage.setItem(qKey, e.target.value);
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          chrome.storage.local.get([qKey], (res) => {
+            if (res?.[qKey] && !questionInput.value) {
+              questionInput.value = res[qKey];
+            }
+          });
+        }
+        questionInput.oninput = (e) => {
+          const textVal = e.target.value;
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.set({ [qKey]: textVal });
+          }
+        };
         questionInput.onclick = (e) => e.stopPropagation();
         questionInput.onmousedown = (e) => e.stopPropagation();
         questionInput.onkeydown = (e) => e.stopPropagation();
@@ -1323,7 +1326,10 @@ try {
             if (currentBtn) btn = currentBtn;
 
             const imageData = e.data.payload;
-            try { localStorage.setItem("sa_img_" + serial, imageData); } catch(e) { console.warn("Lỗi lưu ảnh nháp", e); }
+            const imgKey = "sa_img_" + serial;
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              chrome.storage.local.set({ [imgKey]: imageData });
+            }
             const originalOnclick = btn.onclick;
             btn.textContent = "OK";
             btn.disabled = false;
@@ -1351,7 +1357,10 @@ try {
                 btn.style.pointerEvents = "";
                 btn.disabled = false;
                 btn.onclick = originalOnclick;
-                try { localStorage.removeItem("sa_img_" + serial); } catch(e){}
+                // Bấm OK copy xong là XÓA NGAY LẬP TỨC KHỎI KHO EXTENSION
+                if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+                  chrome.storage.local.remove([imgKey]);
+                }
               } catch (err) { 
                 self.utils.toast("❌ Lỗi copy: " + err.message, "error");
               }
@@ -1376,15 +1385,14 @@ try {
         const originalText = (triggerSource === 'chu') ? "Khác" : "Gemini";
 
         // 1. Kiểm tra chống xung đột (Mutex Lock): Nếu quẻ này đang chạy, không cho kích hoạt tiếp
-        const runningRaw = localStorage.getItem("sa_running_" + serial);
-        if (runningRaw) {
-          try {
-            const r = JSON.parse(runningRaw);
-            if (r && r.startTime && (Date.now() - r.startTime < 120000)) {
-              self.utils.toast(`⏳ [${serial}] Quẻ này đang được luận, vui lòng đợi xong!`, "warning");
-              return;
-            }
-          } catch(e) {}
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          const checkRun = await new Promise(resolve => {
+            chrome.storage.local.get(["sa_running_" + serial], res => resolve(res?.["sa_running_" + serial]));
+          });
+          if (checkRun && checkRun.startTime && (Date.now() - checkRun.startTime < 120000)) {
+            self.utils.toast(`⏳ [${serial}] Quẻ này đang được luận, vui lòng đợi xong!`, "warning");
+            return;
+          }
         }
 
         // Bắt tên khách hàng NGAY GIÂY PHÚT BẤM NÚT LUẬN (tránh bị lệch khi người dùng đổi tab chat)
@@ -1406,14 +1414,11 @@ try {
           b.title = "Đang luận quẻ, tạm khóa nút này để chống xung đột...";
         });
 
-        // Đánh dấu đang chạy ngầm trong cả localStorage và chrome.storage.local (kèm timestamp và triggerSource)
+        // Đánh dấu đang chạy ngầm trong kho Extension (kèm timestamp và triggerSource)
         const runInfo = { startTime: Date.now(), customerName: capturedCustomerName, triggerSource, tz };
-        try {
-          localStorage.setItem("sa_running_" + serial, JSON.stringify(runInfo));
-          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-            chrome.storage.local.set({ ['sa_running_' + serial]: runInfo });
-          }
-        } catch(e) {}
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          chrome.storage.local.set({ ['sa_running_' + serial]: runInfo });
+        }
 
         const convId = self.utils.getActiveConversationId();
         const dateObj = date ? { year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate(), hour: date.getHours(), min: date.getMinutes() } : null;
@@ -1504,77 +1509,62 @@ try {
     init() {
       const self = SapoAuto_v1;
 
-      // === TỰ ĐỘNG DỌN DẸP CỜ LOADING CŨ KHI F5/MỞ TRANG (CHỐNG TREO ⌛ VĨNH VIỄN) ===
+      // === TỰ ĐỘNG DỌN DẸP SẠCH TOÀN BỘ RÁC CŨ TRONG localStorage ĐỂ TRẢ LẠI 5MB TRỐNG ===
       try {
         Object.keys(localStorage).forEach(k => {
-          if (k.startsWith("sa_running_")) {
-            try {
-              const run = JSON.parse(localStorage.getItem(k) || "{}");
-              if (!run.startTime || Date.now() - run.startTime > 120000) {
-                localStorage.removeItem(k);
-              }
-            } catch(e) { localStorage.removeItem(k); }
-          }
-          if (k.startsWith("sa_loading_")) {
+          if (k.startsWith("sa_")) {
             localStorage.removeItem(k);
-          }
-          // Dọn dẹp các key sa_res_ cũ của phiên bản trước (chống hiển thị chéo)
-          if (k.startsWith("sa_res_") && !k.startsWith("sa_res_luan_") && !k.startsWith("sa_res_chu_")) {
-            localStorage.removeItem(k);
-            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-              chrome.storage.local.remove(k);
-            }
           }
         });
       } catch(e) {}
 
-      // === TIMER TỰ ĐỘNG KHÔI PHỤC NÚT BỊ TREO ⌛ (Kiểm tra mỗi 30 giây, không cần F5) ===
+      // === TIMER TỰ ĐỘNG KHÔI PHỤC NÚT BỊ TREO ⌛ (Kiểm tra mỗi 30 giây qua chrome.storage.local) ===
       setInterval(() => {
         try {
-          Object.keys(localStorage).forEach(k => {
-            if (k.startsWith("sa_running_")) {
-              try {
-                const run = JSON.parse(localStorage.getItem(k) || "{}");
-                if (!run.startTime || Date.now() - run.startTime > 120000) {
-                  localStorage.removeItem(k);
-                  const serial = k.replace("sa_running_", "");
-                  const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
-                  luanBtns.forEach(b => {
-                    if (b.textContent === "Copy") {
-                      b.disabled = false;
-                      b.style.opacity = "1";
-                      b.removeAttribute("title");
-                    } else {
-                      b.textContent = "Gemini";
-                      b.disabled = false;
-                      b.style.opacity = "1";
-                      b.style.background = "";
-                      b.style.color = "";
-                      b.removeAttribute("title");
-                    }
-                  });
-                  const chuBtns = document.querySelectorAll(`.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`);
-                  chuBtns.forEach(b => {
-                    if (b.textContent === "Copy") {
-                      b.disabled = false;
-                      b.style.opacity = "1";
-                      b.removeAttribute("title");
-                    } else {
-                      b.textContent = "Khác";
-                      b.disabled = false;
-                      b.style.opacity = "1";
-                      b.style.background = "";
-                      b.style.color = "";
-                      b.removeAttribute("title");
-                    }
-                  });
-                  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-                    chrome.storage.local.remove("sa_running_" + serial);
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.get(null, (allData) => {
+              if (!allData) return;
+              Object.keys(allData).forEach(k => {
+                if (k.startsWith("sa_running_")) {
+                  const run = allData[k];
+                  if (!run || !run.startTime || Date.now() - run.startTime > 120000) {
+                    chrome.storage.local.remove(k);
+                    const serial = k.replace("sa_running_", "");
+                    const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
+                    luanBtns.forEach(b => {
+                      if (b.textContent === "Copy") {
+                        b.disabled = false;
+                        b.style.opacity = "1";
+                        b.removeAttribute("title");
+                      } else {
+                        b.textContent = "Gemini";
+                        b.disabled = false;
+                        b.style.opacity = "1";
+                        b.style.background = "";
+                        b.style.color = "";
+                        b.removeAttribute("title");
+                      }
+                    });
+                    const chuBtns = document.querySelectorAll(`.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`);
+                    chuBtns.forEach(b => {
+                      if (b.textContent === "Copy") {
+                        b.disabled = false;
+                        b.style.opacity = "1";
+                        b.removeAttribute("title");
+                      } else {
+                        b.textContent = "Khác";
+                        b.disabled = false;
+                        b.style.opacity = "1";
+                        b.style.background = "";
+                        b.style.color = "";
+                        b.removeAttribute("title");
+                      }
+                    });
                   }
                 }
-              } catch(e) { localStorage.removeItem(k); }
-            }
-          });
+              });
+            });
+          }
         } catch(e) {}
       }, 30000);
 
@@ -1586,11 +1576,9 @@ try {
             self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
           } else if (msg.action === 'AI_QUE_COMPLETED') {
             const { serial, type, content, customerName, model, triggerSource = 'luan' } = msg;
-            const resKey = `sa_res_${triggerSource}_${serial}`;
-            try {
-              localStorage.setItem(resKey, JSON.stringify({ type, content, model, triggerSource }));
-              localStorage.removeItem("sa_running_" + serial);
-            } catch(e) {}
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              chrome.storage.local.remove("sa_running_" + serial);
+            }
 
             if (triggerSource === 'chu') {
               // Cập nhật nút Khác thành Copy (Xanh nếu thành công, Vàng nếu fallback)
@@ -1628,9 +1616,9 @@ try {
             }
           } else if (msg.action === 'AI_QUE_FAILED') {
             const { serial, error, customerName, triggerSource = 'luan' } = msg;
-            try {
-              localStorage.removeItem("sa_running_" + serial);
-            } catch(e) {}
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              chrome.storage.local.remove("sa_running_" + serial);
+            }
 
             const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
             luanBtns.forEach(b => {
