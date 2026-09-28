@@ -783,23 +783,29 @@ function aiExtractTransferName_(bankText) {
   }
 
   try {
-    var prompt = "Bạn là hệ thống trích xuất tên người từ nội dung chuyển khoản ngân hàng Việt Nam.\n\n" +
-      "NHIỆM VỤ: Từ nội dung chuyển khoản dưới đây, hãy trích xuất TÊN NGƯỜI CHUYỂN TIỀN (người gửi tiền).\n\n" +
-      "QUY TẮC BẮT BUỘC:\n" +
-      "1. CHỈ trả về TÊN NGƯỜI (họ và tên), KHÔNG kèm giải thích, dấu ngoặc, hay bất kỳ ký tự thừa nào.\n" +
-      "2. Bỏ qua tất cả: mã giao dịch (MBVCB, IBVCB, FT...), tên ngân hàng (VPBank, Techcombank, VCB...), " +
-      "số tài khoản, các cụm từ hệ thống như 'chuyển khoản', 'thanh toán', 'CK', 'QR', 'CT TU', 'TOI', 'TAI', " +
-      "'NHAN TU', 'STK', 'NAPAS', 'TRACE'.\n" +
-      "3. Nếu có cả tên người gửi lẫn người nhận, chỉ trích tên NGƯỜI GỬI (người chuyển tiền đến).\n" +
-      "4. Nếu nội dung chỉ có mã số, ký hiệu, hoặc không thể xác định chắc chắn đâu là tên người → trả về đúng 1 từ: NONE\n" +
-      "5. Giữ nguyên dạng chữ gốc (có dấu hoặc không dấu tùy nội dung ban đầu).\n\n" +
-      "VÍ DỤ:\n" +
-      "- Input: \"MBVCB 15782087455 6240BFTVGLQ14K5P NGUYEN MAI VUONG CK THANH TOAN\" → Output: NGUYEN MAI VUONG\n" +
-      "- Input: \"CT TU 0591000304165 NGUYEN VAN SANG TOI 60696959493 HOANG THI HANH TAI VPBANK\" → Output: NGUYEN VAN SANG\n" +
-      "- Input: \"phuonguyen\" → Output: phuonguyen\n" +
+    var prompt = "Bạn là hệ thống trích xuất tên khách hàng từ nội dung chuyển khoản ngân hàng để khớp với Facebook.\n\n" +
+      "NHIỆM VỤ: Trích xuất TÊN KHÁCH HÀNG (đặc biệt ưu tiên tên Facebook / Nickname được ghi chú trong nội dung).\n\n" +
+      "THỨ TỰ ƯU TIÊN BẮT BUỘC:\n" +
+      "1. ƯU TIÊN 1 (CAO NHẤT - TÊN FB / NICKNAME / LỜI NHẮN): Nếu nội dung có ghi chú tên Facebook, nickname, hoặc lời nhắn định danh của khách " +
+      "(thường đi kèm các từ: 'fb', 'facebook', 'nick', 'acc', 'tk', 'khach', hoặc đứng trước/sau 'ck', 'chuyen', 'thanh toan') " +
+      "-> BẮT BUỘC trích xuất TÊN NÀY trước, và BỎ QUA tên chủ tài khoản ngân hàng chuyển hộ.\n" +
+      "   Lưu ý: Chỉ lấy phần TÊN, BỎ CÁC TỪ TIỀN TỐ/HẬU TỐ như 'fb', 'facebook', 'nick', 'ck', 'chuyen' (Ví dụ: 'fb Minh Ngoc ck' -> chỉ lấy 'Minh Ngoc').\n" +
+      "2. ƯU TIÊN 2 (TÊN CHỦ TÀI KHOẢN): Nếu KHÔNG CÓ bất kỳ tên FB hay lời nhắn định danh nào, mới lấy tên người chuyển tiền trên ngân hàng.\n\n" +
+      "QUY TẮC BỔ SUNG:\n" +
+      "- CHỈ trả về đúng TÊN (họ và tên hoặc nickname), KHÔNG kèm giải thích, dấu ngoặc hay từ thừa.\n" +
+      "- Bỏ qua: mã giao dịch (MBVCB, FT...), tên ngân hàng, số tài khoản, các từ: 'CT TU', 'TOI', 'TAI VPBANK', 'STK', 'TRACE'...\n" +
+      "- Nếu nội dung chỉ có mã số, ký hiệu, hoặc không tìm thấy tên người -> trả về đúng 1 từ: NONE\n" +
+      "- Giữ nguyên dạng chữ gốc (có dấu hoặc không dấu tùy nội dung).\n\n" +
+      "VÍ DỤ ĐIỂN HÌNH:\n" +
+      "- Input: \"HOANG THI THUY DUONG fb Minh Ngoc ck\" → Output: Minh Ngoc (Khách ghi rõ tên fb Minh Ngoc, bỏ tên chủ tk HOANG THI THUY DUONG)\n" +
+      "- Input: \"NGUYEN VAN A nick Thu Ha chuyen tien\" → Output: Thu Ha (Khách ghi nick Thu Ha)\n" +
+      "- Input: \"TRAN VAN B Phuong Uyen ck\" → Output: Phuong Uyen\n" +
       "- Input: \"FB TRANG THU\" → Output: TRANG THU\n" +
+      "- Input: \"phuonguyen ck\" → Output: phuonguyen\n" +
+      "- Input: \"MBVCB 15782087455 6240BFTVGLQ14K5P NGUYEN MAI VUONG\" → Output: NGUYEN MAI VUONG (Không có ghi chú fb thì lấy tên chủ tk)\n" +
+      "- Input: \"CT TU 0591000304165 NGUYEN VAN SANG TOI 60696959493 HOANG THI HANH TAI VPBANK\" → Output: NGUYEN VAN SANG\n" +
       "- Input: \"123456789 TRACE XYZ\" → Output: NONE\n\n" +
-      "NỘI DUNG CHUYỂN KHOẢN:\n\"\"\"" + bankText + "\"\"\"\n\nTÊN NGƯỜI:";
+      "NỘI DUNG CHUYỂN KHOẢN:\n\"\"\"" + bankText + "\"\"\"\n\nTÊN KHÁCH HÀNG:";
 
     var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=" + apiKey;
 
