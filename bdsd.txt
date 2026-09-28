@@ -751,14 +751,144 @@ function parseTagTime_(val) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
+// ----------------------------------
+// BỘ LỌC AI GEMINI: TRÍCH XUẤT TÊN NGƯỜI TỪ NỘI DUNG CHUYỂN KHOẢN
+// Model: gemini-3.1-flash-lite (500 lượt/ngày miễn phí)
+// Nguyên tắc: "Thà bỏ sót, không tạo nhầm"
+// Fallback: Nếu AI lỗi/timeout/không có key → tự động dùng regex cũ 100%
+// ----------------------------------
+function getGeminiApiKey_() {
+  const ss = getSpreadsheet_();
+  if (ss) {
+    const configSheet = ss.getSheetByName("Config");
+    if (configSheet) {
+      const data = configSheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]).trim() === "gemini_api_key" && data[i][1]) {
+          return String(data[i][1]).trim();
+        }
+      }
+    }
+  }
+  return "";
+}
+
+function aiExtractTransferName_(bankText) {
+  if (!bankText) return null;
+
+  const apiKey = getGeminiApiKey_();
+  if (!apiKey) {
+    Logger.log("⚠️ AI: Chưa có gemini_api_key trong sheet Config → Bỏ qua AI, dùng regex.");
+    return null;
+  }
+
+  try {
+    var prompt = "Bạn là hệ thống trích xuất tên người từ nội dung chuyển khoản ngân hàng Việt Nam.\n\n" +
+      "NHIỆM VỤ: Từ nội dung chuyển khoản dưới đây, hãy trích xuất TÊN NGƯỜI CHUYỂN TIỀN (người gửi tiền).\n\n" +
+      "QUY TẮC BẮT BUỘC:\n" +
+      "1. CHỈ trả về TÊN NGƯỜI (họ và tên), KHÔNG kèm giải thích, dấu ngoặc, hay bất kỳ ký tự thừa nào.\n" +
+      "2. Bỏ qua tất cả: mã giao dịch (MBVCB, IBVCB, FT...), tên ngân hàng (VPBank, Techcombank, VCB...), " +
+      "số tài khoản, các cụm từ hệ thống như 'chuyển khoản', 'thanh toán', 'CK', 'QR', 'CT TU', 'TOI', 'TAI', " +
+      "'NHAN TU', 'STK', 'NAPAS', 'TRACE'.\n" +
+      "3. Nếu có cả tên người gửi lẫn người nhận, chỉ trích tên NGƯỜI GỬI (người chuyển tiền đến).\n" +
+      "4. Nếu nội dung chỉ có mã số, ký hiệu, hoặc không thể xác định chắc chắn đâu là tên người → trả về đúng 1 từ: NONE\n" +
+      "5. Giữ nguyên dạng chữ gốc (có dấu hoặc không dấu tùy nội dung ban đầu).\n\n" +
+      "VÍ DỤ:\n" +
+      "- Input: \"MBVCB 15782087455 6240BFTVGLQ14K5P NGUYEN MAI VUONG CK THANH TOAN\" → Output: NGUYEN MAI VUONG\n" +
+      "- Input: \"CT TU 0591000304165 NGUYEN VAN SANG TOI 60696959493 HOANG THI HANH TAI VPBANK\" → Output: NGUYEN VAN SANG\n" +
+      "- Input: \"phuonguyen\" → Output: phuonguyen\n" +
+      "- Input: \"FB TRANG THU\" → Output: TRANG THU\n" +
+      "- Input: \"123456789 TRACE XYZ\" → Output: NONE\n\n" +
+      "NỘI DUNG CHUYỂN KHOẢN:\n\"\"\"" + bankText + "\"\"\"\n\nTÊN NGƯỜI:";
+
+    var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=" + apiKey;
+
+    var payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 50
+      }
+    };
+
+    var response = UrlFetchApp.fetch(url, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    if (response.getResponseCode() >= 300) {
+      Logger.log("⚠️ AI: Gemini API lỗi HTTP " + response.getResponseCode() + " → Fallback regex.");
+      return null;
+    }
+
+    var json = JSON.parse(response.getContentText());
+    var rawResult = "";
+    try {
+      rawResult = json.candidates[0].content.parts[0].text || "";
+    } catch (eRead) {
+      Logger.log("⚠️ AI: Không đọc được response Gemini → Fallback regex.");
+      return null;
+    }
+
+    // Lấy dòng đầu tiên, bỏ dấu ngoặc kép/markdown nếu AI trả kèm
+    var result = rawResult.trim().split("\n")[0].trim();
+    result = result.replace(/^["'`*_\[\]{}()]+|["'`*_\[\]{}()]+$/g, "").trim();
+
+    // Kiểm tra kết quả cơ bản
+    if (!result || result.toUpperCase() === "NONE" || result.length < 2) {
+      Logger.log("⚠️ AI: Không trích xuất được tên từ ND: '" + bankText + "' (AI trả: '" + result + "') → Fallback regex.");
+      return null;
+    }
+
+    // Loại bỏ số và ký tự đặc biệt, chỉ giữ chữ cái và khoảng trắng
+    var nameOnly = result.replace(/[0-9]/g, "").replace(/[^a-zA-Z\u00C0-\u024F\u1E00-\u1EFF\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (nameOnly.length < 2) {
+      Logger.log("⚠️ AI: Kết quả không hợp lệ ('" + result + "') → Fallback regex.");
+      return null;
+    }
+
+    // CHỐNG HALLUCINATION: Kiểm tra tên AI trích xuất có thực sự xuất hiện trong nội dung gốc
+    // Chuẩn hóa cả 2 bên (bỏ dấu + uppercase) rồi so sánh từng từ
+    var aiNormalized = removeVietnameseTones_(nameOnly);
+    var bankNormalized = removeVietnameseTones_(bankText);
+    var aiWords = aiNormalized.split(/\s+/).filter(function(w) { return w.length >= 2; });
+    var matchedInSource = aiWords.filter(function(w) { return bankNormalized.indexOf(w) !== -1; });
+
+    // Yêu cầu: ít nhất min(2, tổng số từ AI) từ phải tìm thấy trong nội dung gốc
+    if (matchedInSource.length < Math.min(2, aiWords.length)) {
+      Logger.log("⚠️ AI: Tên '" + nameOnly + "' không tìm thấy trong nội dung gốc ('" + bankText + "') → Có thể hallucination → Fallback regex.");
+      return null;
+    }
+
+    Logger.log("🤖 AI: Trích xuất tên thành công: '" + nameOnly + "' (từ ND: '" + bankText + "')");
+    return nameOnly;
+
+  } catch (err) {
+    Logger.log("⚠️ AI: Lỗi gọi Gemini: " + err.message + " → Fallback regex.");
+    return null;
+  }
+}
+
 function findPendingCustomerByName_(bankText) {
   const ss = getSpreadsheet_();
   if (!ss) return null;
   const sheet = ss.getSheetByName("Transfers");
   if (!sheet) return null;
 
-  // Trích xuất nội dung thuần của người chuyển khoản (đã lọc sạch rác ngân hàng)
-  const cleanRemark = extractTransferRemark_(bankText);
+  // === BỘ LỌC AI GEMINI + FALLBACK REGEX ===
+  // Bước 1: Thử AI Gemini 3.1 Flash Lite trích xuất tên người thông minh
+  // Bước 2: Nếu AI thất bại/lỗi/không có key → Tự động fallback về regex truyền thống (luồng cũ 100%)
+  let cleanRemark = "";
+  const aiExtractedName = aiExtractTransferName_(bankText);
+  if (aiExtractedName) {
+    cleanRemark = removeVietnameseTones_(aiExtractedName);
+    Logger.log("🤖 Matching dùng tên AI: '" + cleanRemark + "'");
+  } else {
+    cleanRemark = extractTransferRemark_(bankText);
+    Logger.log("🔧 Matching dùng regex truyền thống: '" + cleanRemark + "'");
+  }
   const compactRemark = cleanRemark.replace(/\s+/g, "");
   
   // Tách tất cả các từ và lọc ra danh sách từ thuần chữ cái (loại bỏ mã số giao dịch/mã tham chiếu ngân hàng ở đầu)
