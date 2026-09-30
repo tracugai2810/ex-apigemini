@@ -483,11 +483,12 @@ const bgAiService = {
 
     // 4. Tạo prompt
     const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
-    let prompt = copyText + (question ? (" " + question) : "");
+    let prompt = '';
     if (mdContent) {
-      prompt += `\n\n---\nKiến thức tham khảo:\n${mdContent}`;
+      prompt = `---\nKiến thức tham khảo:\n${mdContent}`;
     }
-    const fullPrompt = prompt + historyContext + summaryInstruction;
+    prompt += summaryInstruction + '\n\n' + copyText + (question ? (' ' + question) : '');
+    const fullPrompt = prompt + historyContext;
 
     // 5. Gọi AI theo provider đã chọn cho nút bấm tương ứng
     try {
