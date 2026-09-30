@@ -369,7 +369,7 @@ const bgAiService = {
   },
 
   // === GỌI API OPENAI-COMPATIBLE (GLM, OpenRouter, DeepSeek, v.v.) ===
-  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000) {
+  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '') {
     if (!apiKey) throw new Error("Chưa cấu hình API Key cho provider này");
     if (!modelName) throw new Error("Chưa cấu hình tên Model");
 
@@ -382,9 +382,16 @@ const bgAiService = {
     try {
       console.log(`[SA-BG] Calling OpenAI-Compatible: ${endpoint} | Model: ${modelName}`);
 
+      // Tách riêng System (kiến thức cố định, cache) và User (quẻ + câu hỏi)
+      const messages = [];
+      if (systemPrompt) {
+        messages.push({ role: "system", content: systemPrompt });
+      }
+      messages.push({ role: "user", content: promptText });
+
       const requestBody = {
         model: modelName,
-        messages: [{ role: "user", content: promptText }]
+        messages
       };
 
       // Tắt suy luận ngầm (thinking) cho Z.AI để tăng tốc phản hồi tối đa, tránh timeout
@@ -481,14 +488,14 @@ const bgAiService = {
     // 3. Lấy ngữ cảnh cũ
     const historyContext = await this.buildContext(settings.syncSheetUrl, conversationId, customerName);
 
-    // 4. Tạo prompt
+    // 4. Tạo prompt — Tách riêng System (cố định, cache) và User (thay đổi mỗi quẻ)
     const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
-    let prompt = '';
+    let systemPrompt = '';
     if (mdContent) {
-      prompt = `---\nKiến thức tham khảo:\n${mdContent}`;
+      systemPrompt = `---\nKiến thức tham khảo:\n${mdContent}`;
     }
-    prompt += summaryInstruction + '\n\n' + copyText + (question ? (' ' + question) : '');
-    const fullPrompt = prompt + historyContext;
+    systemPrompt += summaryInstruction;
+    const userPrompt = copyText + (question ? (' ' + question) : '') + historyContext;
 
     // 5. Gọi AI theo provider đã chọn cho nút bấm tương ứng
     try {
@@ -503,14 +510,18 @@ const bgAiService = {
           settings.customAiBaseUrl,
           settings.customAiModel,
           settings.customAiApiKey,
-          fullPrompt,
-          120000
+          userPrompt,
+          120000,
+          systemPrompt
         );
       } else {
-        // === GEMINI (MẶC ĐỊNH CHO NÚT GEMINI) — LOGIC GIỮ NGUYÊN 100% ===
+        // === GEMINI (MẶC ĐỊNH CHO NÚT GEMINI) ===
         usedModelName = settings.model;
         sendStatus(`Đang gọi AI (${usedModelName})...`);
-        const payload = { contents: [{ parts: [{ text: fullPrompt }] }] };
+        const payload = {
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: userPrompt }] }]
+        };
         const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 45000, (msg) => sendStatus(msg));
         usedModelName = modelName;
         aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
