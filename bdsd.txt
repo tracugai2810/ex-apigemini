@@ -178,7 +178,24 @@ function processSource_(entries, store, sourceKey) {
           if (orderResult && orderResult.success) {
             entry.orderStatus = { isAutoScan: true, success: true, customerName: orderResult.customerName };
           } else {
-            entry.orderStatus = { isAutoScan: true, success: false };
+            // NẾU KHÔNG TẠO ĐƯỢC SAU CÁC BỘ LỌC -> TỰ ĐỘNG TẠO ĐƠN DỰ PHÒNG GẮN VỚI KHÁCH GẦN NHẤT
+            let fallbackResult = null;
+            try {
+              fallbackResult = processFallbackOrderForEntry_(entry, orderResult);
+            } catch (eFallback) {
+              Logger.log("⚠️ Ngoại lệ tạo đơn dự phòng: " + eFallback.message);
+            }
+
+            if (fallbackResult && fallbackResult.success) {
+              entry.orderStatus = {
+                isAutoScan: true,
+                success: true,
+                customerName: fallbackResult.customerName,
+                isFallback: true
+              };
+            } else {
+              entry.orderStatus = { isAutoScan: true, success: false };
+            }
           }
         }
       }
@@ -263,6 +280,9 @@ function processAutoOrderForEntry_(entry) {
 
     if (orderResult && orderResult.success) {
       updateTransferRecordStatus_(record.rowNumber, "ORDERED", entry.amountValue, orderResult.orderId);
+      try {
+        saveLastSuccessCustomer_(record);
+      } catch (eSave) {}
       Logger.log("✅ ĐÃ TẠO ĐƠN THÀNH CÔNG! Mã đơn Sapo: #" + orderResult.orderId);
       return { success: true, orderId: orderResult.orderId, customerName: record.customerName };
     } else {
@@ -273,6 +293,185 @@ function processAutoOrderForEntry_(entry) {
     Logger.log("❌ Ngoại lệ khi tạo đơn: " + err.message);
     return { success: false, reason: err.message };
   }
+}
+
+// ============================================
+// 4b. XỬ LÝ ĐƠN DỰ PHÒNG CHO GIAO DỊCH KHÔNG KHỚP
+// ============================================
+function saveLastSuccessCustomer_(record) {
+  if (!record || !record.convId) return;
+  try {
+    const store = PropertiesService.getScriptProperties();
+    const data = {
+      rowNumber: record.rowNumber,
+      convId: record.convId,
+      pageId: record.pageId,
+      fbPageId: record.fbPageId || "",
+      customerName: record.customerName || "Khách Hàng"
+    };
+    store.setProperty("LAST_ORDERED_CUSTOMER", JSON.stringify(data));
+  } catch (e) {}
+}
+
+function isSafeToFallback_(orderResult) {
+  if (!orderResult) return true;
+  const reason = String(orderResult.reason || orderResult.error || "");
+
+  // Không tìm thấy khách khớp tên FB -> 100% an toàn để tạo đơn dự phòng
+  if (reason.includes("Không tìm thấy khách")) return true;
+
+  // Thiếu token -> dừng vì fallback cũng sẽ thiếu token
+  if (reason.includes("Thiếu Token")) return false;
+
+  // Lỗi Step 1 (Checkout chưa khởi tạo) -> An toàn để thử khách khác
+  if (reason.includes("Step 1 HTTP")) {
+    if (reason.includes("401") || reason.includes("403")) return false;
+    return true;
+  }
+
+  // Lỗi Step 2 HTTP 4xx (dữ liệu hội thoại/page khách cũ bị lỗi) -> Có thể thử khách khác
+  if (reason.includes("Step 2 HTTP 4")) {
+    if (reason.includes("401") || reason.includes("403")) return false;
+    return true;
+  }
+
+  // Nếu lỗi mạng, timeout hoặc HTTP 5xx -> Bỏ qua để tránh tạo trùng
+  Logger.log("⚠️ Không an toàn để tạo đơn dự phòng (lý do: " + reason + ")");
+  return false;
+}
+
+function getRecentOrderedCustomerCandidates_() {
+  const ss = getSpreadsheet_();
+  if (!ss) return [];
+  const sheet = ss.getSheetByName("Transfers");
+  if (!sheet) return [];
+
+  const data = sheet.getDataRange().getValues();
+  const orderedList = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const convId = String(data[i][1] || "").trim();
+    const pageId = String(data[i][2] || "").trim();
+    const fbPageId = String(data[i][3] || "").trim();
+    const customerName = String(data[i][4] || "").trim();
+    const status = String(data[i][5] || "").trim().toUpperCase();
+    const orderTimeRaw = String(data[i][9] || "").trim();
+
+    // TUYỆT ĐỐI CHỈ LẤY KHÁCH ĐÃ TẠO ĐƠN (ORDERED), TUYỆT ĐỐI KHÔNG LẤY PENDING
+    if (status !== "ORDERED") continue;
+    if (!convId || !pageId) continue;
+
+    // Lấy mốc thời gian mới nhất nếu có nhiều lần tạo đơn (cắt theo dấu |)
+    let latestOrderTimeStr = orderTimeRaw;
+    if (orderTimeRaw.includes("|")) {
+      const parts = orderTimeRaw.split("|");
+      latestOrderTimeStr = parts[parts.length - 1].trim();
+    }
+
+    const parsedOrderTime = parseTagTime_(latestOrderTimeStr);
+
+    orderedList.push({
+      rowNumber: i + 1,
+      convId: convId,
+      pageId: pageId,
+      fbPageId: fbPageId,
+      customerName: customerName || "Khách Hàng",
+      status: "ORDERED",
+      orderTime: parsedOrderTime
+    });
+  }
+
+  // Sắp xếp nhóm ORDERED theo thời gian tạo đơn mới nhất giảm dần
+  orderedList.sort(function(a, b) {
+    if (b.orderTime !== a.orderTime) {
+      return b.orderTime - a.orderTime;
+    }
+    return b.rowNumber - a.rowNumber;
+  });
+
+  let candidates = orderedList;
+
+  // Nếu trong bộ nhớ có lưu khách tạo đơn thành công gần nhất -> ưu tiên đưa lên đầu
+  try {
+    const lastStore = PropertiesService.getScriptProperties().getProperty("LAST_ORDERED_CUSTOMER");
+    if (lastStore) {
+      const lastCust = JSON.parse(lastStore);
+      if (lastCust && lastCust.convId) {
+        const foundIdx = candidates.findIndex(function(c) {
+          return String(c.convId).trim() === String(lastCust.convId).trim();
+        });
+        if (foundIdx > 0) {
+          const item = candidates.splice(foundIdx, 1)[0];
+          candidates.unshift(item);
+        }
+      }
+    }
+  } catch (eStore) {}
+
+  return candidates;
+}
+
+function processFallbackOrderForEntry_(entry, originalResult) {
+  Logger.log("🔄 Bắt đầu tạo đơn dự phòng cho GD: " + entry.amount + " | ND: " + entry.name);
+
+  if (!isSafeToFallback_(originalResult)) {
+    return { success: false, reason: "Không an toàn để tạo đơn dự phòng" };
+  }
+
+  const token = getSapoToken_();
+  if (!token) {
+    Logger.log("❌ Dự phòng: Không có Token Sapo!");
+    return { success: false, reason: "Thiếu Token" };
+  }
+
+  const candidates = getRecentOrderedCustomerCandidates_();
+  if (!candidates || candidates.length === 0) {
+    Logger.log("⚠️ Dự phòng: Không tìm thấy khách nào trong lịch sử để gán đơn!");
+    return { success: false, reason: "Không có khách dự phòng" };
+  }
+
+  // Thử tối đa 3 khách gần nhất (đề phòng khách đầu tiên bị lỗi pageId/convId)
+  const maxAttempts = Math.min(candidates.length, 3);
+  for (let i = 0; i < maxAttempts; i++) {
+    const cand = candidates[i];
+    Logger.log("🛒 [Dự phòng] Thử gắn vào khách: '" + cand.customerName + "' (convId: " + cand.convId + ", Page: " + cand.pageId + ")");
+
+    try {
+      const orderResult = createSapoOrder_({
+        conversationId: cand.convId,
+        pageId: cand.pageId,
+        fbPageId: cand.fbPageId,
+        customerName: cand.customerName,
+        amount: entry.amountValue,
+        token: token,
+        tenant: CONFIG.sapoTenant,
+        isFallback: true,
+        originalRemark: entry.name
+      });
+
+      if (orderResult && orderResult.success) {
+        // Gắn đơn trực tiếp vào dòng khách hàng đó trong sheet Transfers
+        updateTransferRecordStatus_(cand.rowNumber, "ORDERED", entry.amountValue, orderResult.orderId);
+        try {
+          saveLastSuccessCustomer_(cand);
+        } catch (eSave) {}
+        Logger.log("🎉 [Dự phòng] TẠO ĐƠN THÀNH CÔNG! Khách: " + cand.customerName + " | Mã đơn Sapo: #" + orderResult.orderId);
+        return {
+          success: true,
+          orderId: orderResult.orderId,
+          customerName: cand.customerName,
+          isFallback: true
+        };
+      } else {
+        Logger.log("⚠️ [Dự phòng] Thử khách '" + cand.customerName + "' thất bại: " + (orderResult ? orderResult.error : "Lỗi API"));
+      }
+    } catch (errAttempt) {
+      Logger.log("⚠️ [Dự phòng] Ngoại lệ khi thử khách '" + cand.customerName + "': " + errAttempt.message);
+    }
+  }
+
+  Logger.log("❌ [Dự phòng] Đã thử " + maxAttempts + " khách gần nhất nhưng không tạo được đơn.");
+  return { success: false, reason: "Tất cả khách dự phòng đều thất bại" };
 }
 
 // ============================================
@@ -350,7 +549,9 @@ function createSapoOrder_(params) {
     inventory_behaviour: "decrement_obeying_policy_in_specify_location",
     location_id: CONFIG.locationId,
     name: customerName || "Khách",
-    note: "Đơn tự động chuyển khoản VPBank (" + noteTitle + ")",
+    note: params.isFallback
+      ? ("Đơn DỰ PHÒNG chuyển khoản VPBank (" + noteTitle + ")" + (params.originalRemark ? (" | ND: " + params.originalRemark) : ""))
+      : ("Đơn tự động chuyển khoản VPBank (" + noteTitle + ")"),
     note_attributes: [],
     phone: null,
     requires_email: false,
@@ -1091,7 +1292,8 @@ function sendFundNotification_(newEntries) {
     // Nếu là giao dịch thuộc diện quét tạo đơn (20k, 50k, 500k)
     if (e.orderStatus && e.orderStatus.isAutoScan) {
       if (e.orderStatus.success && e.orderStatus.customerName) {
-        textBlock += "\n✅ " + e.orderStatus.customerName;
+        const fallbackSuffix = e.orderStatus.isFallback ? " (Đơn dự phòng)" : "";
+        textBlock += "\n✅ " + e.orderStatus.customerName + fallbackSuffix;
       } else {
         textBlock += "\n❌ Chưa tạo";
       }
@@ -1430,3 +1632,25 @@ function chotSoNgayBayGio() {
     Logger.log("Lỗi khi chốt sổ: " + e.message);
   }
 }
+
+// ----------------------------------
+// HÀM KIỂM TRA THỬ: KHÁCH ĐÃ TẠO ĐƠN GẦN NHẤT ĐƯỢC CHỌN CHO ĐƠN DỰ PHÒNG
+// ----------------------------------
+function testFallbackDryRun() {
+  Logger.log("=== 🔍 KIỂM TRA KHÁCH ĐÃ TẠO ĐƠN GẦN NHẤT (CHO ĐƠN DỰ PHÒNG) ===");
+  const candidates = getRecentOrderedCustomerCandidates_();
+  Logger.log("Tổng số khách có trạng thái ORDERED tìm thấy: " + candidates.length);
+  if (candidates.length === 0) {
+    Logger.log("⚠️ Chưa có khách nào có trạng thái ORDERED trong sheet Transfers!");
+    return;
+  }
+
+  Logger.log("Top 5 khách đã tạo đơn gần nhất:");
+  candidates.slice(0, 5).forEach(function(c, i) {
+    Logger.log((i + 1) + ". Khách: " + c.customerName + " | Dòng: " + c.rowNumber + " | Page: " + c.pageId + " | convId: " + c.convId + " | Thời gian: " + (c.orderTime ? new Date(c.orderTime).toLocaleString("vi-VN") : "N/A"));
+  });
+
+  const top = candidates[0];
+  Logger.log("👉 Nếu có GD không khớp tên FB, đơn dự phòng sẽ tự động gắn vào: '" + top.customerName + "' (convId: " + top.convId + ")");
+}
+
