@@ -495,6 +495,8 @@ const bgAiService = {
       systemPrompt = `---\nKiến thức tham khảo:\n${mdContent}`;
     }
     systemPrompt += summaryInstruction;
+    const outputFormatInstruction = '\n\n[YÊU CẦU ĐỊNH DẠNG ĐẦU RA]: Trả lời hoàn toàn bằng tiếng Việt và bắt đầu ngay vào nội dung bài luận (Bước 1). TUYỆT ĐỐI KHÔNG viết ra quá trình suy nghĩ nháp, phân tích đề bài, dàn ý nội bộ hay "thinking process" bằng tiếng Anh hoặc bất kỳ ngôn ngữ nào khác.';
+    systemPrompt += outputFormatInstruction;
     const userPrompt = copyText + (question ? (' ' + question) : '') + historyContext;
 
     // 5. Gọi AI theo provider đã chọn cho nút bấm tương ứng
