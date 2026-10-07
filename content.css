@@ -34,9 +34,10 @@
   user-select: none;
 }
 
-/* Nút tạo đơn Premium */
+/* Nút tạo đơn thủ công (20k, 50k, 500k) — Đã ẩn vì hệ thống tự động tạo đơn 24/7 */
 .ocr-btn {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: none !important; /* Ẩn giao diện, giữ nguyên logic JS */
+  align-items: center; justify-content: center;
   border: none; outline: none;
   width: 38px; height: 32px;
   border-radius: 9px;
@@ -224,7 +225,7 @@
 
 /* ===== NEW: MANUAL SERIAL INPUT FOR IMAGES ===== */
 .sa-serial-input-wrapper {
-  margin-top: 6px;
+  margin-top: 0; /* Đưa lên thẳng góc trên bên phải của ảnh (không còn bị tụt xuống) */
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -232,8 +233,8 @@
 }
 
 .sa-serial-input {
-  width: 38px;
-  height: 26px;
+  width: 44px;
+  height: 28px;
   background: #1e293b;
   border: 1px solid #3b82f6;
   border-radius: 6px;
@@ -242,9 +243,10 @@
   text-align: center;
   outline: none;
   transition: all 0.2s;
+  box-sizing: border-box;
 }
 .sa-serial-input:focus {
-  width: 50px;
+  width: 62px;
   background: #0f172a;
   box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
 }
@@ -256,9 +258,10 @@
   align-items: center;
   gap: 6px;
   background: #0f172a;
-  padding: 6px;
+  padding: 8px 6px;
   border-radius: 8px;
   border: 1px solid #334155;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
   animation: pop-in 0.2s ease-out;
   width: fit-content;
 }
@@ -290,7 +293,7 @@
 .sa-scan-btn {
   display: inline-flex; align-items: center; justify-content: center;
   border: none; outline: none;
-  width: 38px; height: 26px;
+  width: 32px; height: 28px;
   border-radius: 6px;
   background: linear-gradient(135deg, #7c3aed, #6d28d9) !important;
   color: #fff;
@@ -299,6 +302,7 @@
   transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4);
   position: relative;
+  box-sizing: border-box;
 }
 .sa-scan-btn:hover {
   transform: scale(1.12);
