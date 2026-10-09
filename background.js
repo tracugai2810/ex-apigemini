@@ -391,7 +391,9 @@ const bgAiService = {
 
       const requestBody = {
         model: modelName,
-        messages
+        messages,
+        temperature: 0.3,
+        top_p: 0.85
       };
 
       // Tắt suy luận ngầm (thinking) cho Z.AI để tăng tốc phản hồi tối đa, tránh timeout
@@ -520,7 +522,11 @@ const bgAiService = {
         sendStatus(`Đang gọi AI (${usedModelName})...`);
         const payload = {
           systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: userPrompt }] }]
+          contents: [{ parts: [{ text: userPrompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            topP: 0.85
+          }
         };
         const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 45000, (msg) => sendStatus(msg));
         usedModelName = modelName;

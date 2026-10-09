@@ -333,7 +333,11 @@ try {
         const payload = {
           contents: [{
             parts: [ { text: promptText } ]
-          }]
+          }],
+          generationConfig: {
+            temperature: 0.3,
+            topP: 0.85
+          }
         };
         const json = await this.executeWithFallback(payload, "TextGen", 60000); // Tăng lên 60s để AI đủ thời gian nhai file kiến thức lớn
         return (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
@@ -355,7 +359,11 @@ try {
         const payload = {
           contents: [{
             parts: [{ text: fullPrompt }]
-          }]
+          }],
+          generationConfig: {
+            temperature: 0.3,
+            topP: 0.85
+          }
         };
         const json = await this.executeWithFallback(payload, "TextGen", 60000);
         let result = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
