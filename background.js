@@ -361,7 +361,7 @@ const bgAiService = {
     }
   },
 
-  async executeWithFallback(apiKey, primaryModel, payload, timeoutMs = 45000, onStatusUpdate = null) {
+  async executeWithFallback(apiKey, primaryModel, payload, timeoutMs = 120000, onStatusUpdate = null) {
     if (!apiKey) throw new Error("Chưa cấu hình API Key");
     const modelName = primaryModel || "gemini-3.7-flash";
     if (typeof onStatusUpdate === 'function') {
@@ -534,7 +534,7 @@ const bgAiService = {
             topP: (typeof settings.aiTopP === 'number' && !isNaN(settings.aiTopP)) ? settings.aiTopP : 0.85
           }
         };
-        const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 45000, (msg) => sendStatus(msg));
+        const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 120000, (msg) => sendStatus(msg));
         usedModelName = modelName;
         aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
       }
