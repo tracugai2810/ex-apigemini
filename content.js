@@ -254,11 +254,13 @@ try {
         try {
           const data = await new Promise(r => {
             if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
-              chrome.storage.sync.get({ geminiApiKey: "", geminiModel: "gemini-3.7-flash" }, r);
-            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.7-flash" }); }
+              chrome.storage.sync.get({ geminiApiKey: "", geminiModel: "gemini-3.7-flash", aiTemperature: 0.3, aiTopP: 0.85 }, r);
+            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.7-flash", aiTemperature: 0.3, aiTopP: 0.85 }); }
           });
           this.apiKey = (data.geminiApiKey || "").trim();
           this.model = data.geminiModel || "gemini-3.7-flash";
+          this.temperature = (typeof data.aiTemperature === 'number' && !isNaN(data.aiTemperature)) ? data.aiTemperature : 0.3;
+          this.topP = (typeof data.aiTopP === 'number' && !isNaN(data.aiTopP)) ? data.aiTopP : 0.85;
         } catch(e) { this.apiKey = ""; }
       },
 
@@ -335,8 +337,8 @@ try {
             parts: [ { text: promptText } ]
           }],
           generationConfig: {
-            temperature: 0.3,
-            topP: 0.85
+            temperature: this.temperature ?? 0.3,
+            topP: this.topP ?? 0.85
           }
         };
         const json = await this.executeWithFallback(payload, "TextGen", 60000); // Tăng lên 60s để AI đủ thời gian nhai file kiến thức lớn
@@ -361,8 +363,8 @@ try {
             parts: [{ text: fullPrompt }]
           }],
           generationConfig: {
-            temperature: 0.3,
-            topP: 0.85
+            temperature: this.temperature ?? 0.3,
+            topP: this.topP ?? 0.85
           }
         };
         const json = await this.executeWithFallback(payload, "TextGen", 60000);

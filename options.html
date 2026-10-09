@@ -118,6 +118,29 @@
       <p style="color:#94a3b8;font-size:11px;margin-top:8px;">Chuẩn OpenAI-Compatible. Hỗ trợ mọi nhà cung cấp như Z.AI (GLM), OpenRouter, DeepSeek... Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
     </section>
 
+    <!-- TINH CHỈNH ĐỘ BAY BỔNG & LOGIC -->
+    <section class="card">
+      <h2>🌡️ Tinh chỉnh Độ bay bổng & Logic (Cả 2 Nút)</h2>
+      <div class="row">
+        <div class="field">
+          <label for="aiTemperature">Độ bay bổng (Temperature)</label>
+          <input type="number" id="aiTemperature" step="0.05" min="0" max="2" placeholder="0.3">
+          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">
+            <b>0.1 – 0.3:</b> Chuẩn logic, kỷ luật.<br>
+            <b>0.4 – 0.6:</b> Cân bằng, luận tượng hay.<br>
+            <b>0.7+:</b> Bay bổng cao. (Mặc định: 0.3)
+          </p>
+        </div>
+        <div class="field">
+          <label for="aiTopP">Bộ lọc chuẩn xác (Top P)</label>
+          <input type="number" id="aiTopP" step="0.05" min="0" max="1" placeholder="0.85">
+          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">
+            Lọc bỏ từ ngữ vô lý, giữ câu chữ gãy gọn. (Mặc định: 0.85, đề xuất: 0.85 – 0.95)
+          </p>
+        </div>
+      </div>
+    </section>
+
     <!-- CẤU HÌNH 2 NÚT LUẬN QUẺ SONG SONG -->
     <section class="card">
       <h2>🎯 Hoạt Động Của 2 Nút Luận Quẻ Song Song</h2>

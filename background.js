@@ -239,7 +239,9 @@ const bgAiService = {
       customAiModel: '',
       glmApiKey: '',
       glmModel: 'glm-4.7-flash',
-      queProvider: 'gemini'
+      queProvider: 'gemini',
+      aiTemperature: 0.3,
+      aiTopP: 0.85
     });
 
     // Fallback thông minh: nếu chưa có customAiBaseUrl mà có glmApiKey cũ -> tự động dùng Z.AI
@@ -260,7 +262,9 @@ const bgAiService = {
       customAiBaseUrl: customBase,
       customAiApiKey: customKey,
       customAiModel: customMod,
-      queProvider: data.queProvider || 'gemini'
+      queProvider: data.queProvider || 'gemini',
+      aiTemperature: (typeof data.aiTemperature === 'number' && !isNaN(data.aiTemperature)) ? data.aiTemperature : 0.3,
+      aiTopP: (typeof data.aiTopP === 'number' && !isNaN(data.aiTopP)) ? data.aiTopP : 0.85
     };
   },
 
@@ -369,7 +373,7 @@ const bgAiService = {
   },
 
   // === GỌI API OPENAI-COMPATIBLE (GLM, OpenRouter, DeepSeek, v.v.) ===
-  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '') {
+  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '', temperature = 0.3, topP = 0.85) {
     if (!apiKey) throw new Error("Chưa cấu hình API Key cho provider này");
     if (!modelName) throw new Error("Chưa cấu hình tên Model");
 
@@ -392,8 +396,8 @@ const bgAiService = {
       const requestBody = {
         model: modelName,
         messages,
-        temperature: 0.3,
-        top_p: 0.85
+        temperature: (typeof temperature === 'number' && !isNaN(temperature)) ? temperature : 0.3,
+        top_p: (typeof topP === 'number' && !isNaN(topP)) ? topP : 0.85
       };
 
       // Tắt suy luận ngầm (thinking) cho Z.AI để tăng tốc phản hồi tối đa, tránh timeout
@@ -514,7 +518,9 @@ const bgAiService = {
           settings.customAiApiKey,
           userPrompt,
           120000,
-          systemPrompt
+          systemPrompt,
+          settings.aiTemperature,
+          settings.aiTopP
         );
       } else {
         // === GEMINI (MẶC ĐỊNH CHO NÚT GEMINI) ===
@@ -524,8 +530,8 @@ const bgAiService = {
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: [{ text: userPrompt }] }],
           generationConfig: {
-            temperature: 0.3,
-            topP: 0.85
+            temperature: (typeof settings.aiTemperature === 'number' && !isNaN(settings.aiTemperature)) ? settings.aiTemperature : 0.3,
+            topP: (typeof settings.aiTopP === 'number' && !isNaN(settings.aiTopP)) ? settings.aiTopP : 0.85
           }
         };
         const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 45000, (msg) => sendStatus(msg));

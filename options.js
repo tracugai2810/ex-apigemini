@@ -36,7 +36,9 @@ const DEFAULTS = {
     }
   ],
   customAiSelectedProfileId: 'prof_zai_glm',
-  queProvider:     'gemini'
+  queProvider:     'gemini',
+  aiTemperature:   0.3,
+  aiTopP:          0.85
 };
 
 // Danh sách model Gemini mặc định (built-in) — giữ nguyên thứ tự
@@ -390,6 +392,12 @@ function saveSettings() {
   }
   renderProfileSelect(currentProfiles, activeProfileId);
 
+  let tempVal = parseFloat(els.aiTemperature ? els.aiTemperature.value : '');
+  if (isNaN(tempVal) || tempVal < 0 || tempVal > 2) tempVal = DEFAULTS.aiTemperature;
+
+  let topPVal = parseFloat(els.aiTopP ? els.aiTopP.value : '');
+  if (isNaN(topPVal) || topPVal < 0 || topPVal > 1) topPVal = DEFAULTS.aiTopP;
+
   chrome.storage.sync.set({
     geminiUrl: gUrl, geminiWidth: gW, geminiHeight: gH,
     claudeUrl: cUrl, claudeWidth: cW, claudeHeight: cH,
@@ -407,7 +415,9 @@ function saveSettings() {
     customAiModel: customAiModelVal,
     customAiProfiles: currentProfiles,
     customAiSelectedProfileId: activeProfileId,
-    queProvider: 'gemini'
+    queProvider: 'gemini',
+    aiTemperature: tempVal,
+    aiTopP: topPVal
   }, () => showStatus('✅ Đã lưu thành công!'));
 }
 
