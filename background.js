@@ -237,6 +237,7 @@ const bgAiService = {
       rewriteGeminiModel: 'gemini-3.5-flash-lite',
       rewriteTemperature: '',
       rewriteTopP: '',
+      customRewriteGeminiModels: [],
       syncSheetUrl: '',
       luchaoUrl: 'https://dshc-luc-hao.vercel.app/',
       customAiBaseUrl: '',
@@ -259,14 +260,30 @@ const bgAiService = {
       customMod = data.glmModel || 'glm-4.7-flash';
     }
 
-    const rwKey = (data.rewriteGeminiApiKey || '').trim() || (data.geminiApiKey || '').trim();
-    const rwModel = (data.rewriteGeminiModel || '').trim() || 'gemini-3.5-flash-lite';
+    const customRwModels = data.customRewriteGeminiModels || [];
+    const rwModelVal = (data.rewriteGeminiModel || '').trim() || 'gemini-3.5-flash-lite';
+    const customRwItem = customRwModels.find(m => m && m.value === rwModelVal);
+
+    let rwType = 'gemini';
+    let rwModel = rwModelVal;
+    let rwKey = (data.rewriteGeminiApiKey || '').trim() || (data.geminiApiKey || '').trim();
+    let rwBaseUrl = '';
+
+    if (customRwItem && (customRwItem.type === 'openai_compatible' || customRwItem.baseUrl)) {
+      rwType = 'openai_compatible';
+      rwModel = customRwItem.model || customRwItem.value;
+      rwKey = (customRwItem.apiKey || '').trim();
+      rwBaseUrl = (customRwItem.baseUrl || '').trim();
+    }
+
     const rwTemp = (data.rewriteTemperature !== '' && data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && !isNaN(parseFloat(data.rewriteTemperature))) ? parseFloat(data.rewriteTemperature) : null;
     const rwTopP = (data.rewriteTopP !== '' && data.rewriteTopP !== undefined && data.rewriteTopP !== null && !isNaN(parseFloat(data.rewriteTopP))) ? parseFloat(data.rewriteTopP) : null;
 
     return {
       apiKey: (data.geminiApiKey || '').trim(),
       model: data.geminiModel || 'gemini-3.7-flash',
+      rewriteType: rwType,
+      rewriteBaseUrl: rwBaseUrl,
       rewriteApiKey: rwKey,
       rewriteModel: rwModel,
       rewriteTemperature: rwTemp,
@@ -571,9 +588,10 @@ const bgAiService = {
         }
 
         // ==============================================================
-        // === BƯỚC 2: TỰ ĐỘNG GỌI GEMINI VIẾT LẠI THEO PHONG CÁCH THỰC TẾ ===
+        // === BƯỚC 2: TỰ ĐỘNG GỌI AI VIẾT LẠI THEO PHONG CÁCH THỰC TẾ ===
         // ==============================================================
-        sendStatus(`✍️ Đang viết lại bài luận theo phong cách người thật...`);
+        const rwModelDisplay = settings.rewriteModel || 'AI';
+        sendStatus(`✍️ Đang viết lại bằng ${rwModelDisplay}...`);
 
         // 1. Tải viet-lai.md từ web (nếu chưa có trong cache ngầm)
         if (!this._cachedVietLaiMd) {
@@ -592,25 +610,43 @@ const bgAiService = {
         let rewrittenResult = null;
         if (vietLaiPrompt && settings.rewriteApiKey) {
           try {
-            const rwPayload = {
-              systemInstruction: { parts: [{ text: vietLaiPrompt }] },
-              contents: [{ parts: [{ text: aiResult }] }]
-            };
-            const genConfig = {};
-            if (settings.rewriteTemperature !== null) genConfig.temperature = settings.rewriteTemperature;
-            if (settings.rewriteTopP !== null) genConfig.topP = settings.rewriteTopP;
-            if (Object.keys(genConfig).length > 0) {
-              rwPayload.generationConfig = genConfig;
-            }
+            console.log(`[SA-BG] Calling Rewrite Model: ${settings.rewriteModel} (Type: ${settings.rewriteType || 'gemini'})`);
+            
+            if (settings.rewriteType === 'openai_compatible') {
+              const textRw = await this.callOpenAICompatible(
+                settings.rewriteBaseUrl,
+                settings.rewriteModel,
+                settings.rewriteApiKey,
+                aiResult,
+                90000,
+                vietLaiPrompt,
+                settings.rewriteTemperature,
+                settings.rewriteTopP
+              );
+              if (textRw && textRw.length > 20) {
+                rewrittenResult = textRw;
+              }
+            } else {
+              const rwPayload = {
+                systemInstruction: { parts: [{ text: vietLaiPrompt }] },
+                contents: [{ parts: [{ text: aiResult }] }]
+              };
+              const genConfig = {};
+              if (settings.rewriteTemperature !== null) genConfig.temperature = settings.rewriteTemperature;
+              if (settings.rewriteTopP !== null) genConfig.topP = settings.rewriteTopP;
+              if (Object.keys(genConfig).length > 0) {
+                rwPayload.generationConfig = genConfig;
+              }
 
-            console.log(`[SA-BG] Calling Rewrite Model: ${settings.rewriteModel}`);
-            const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 60000);
-            const textRw = (rwRes?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-            if (textRw && textRw.length > 20) {
-              rewrittenResult = textRw;
+              console.log(`[SA-BG] Calling Gemini Rewrite Model: ${settings.rewriteModel}`);
+              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 60000);
+              const textRw = (rwRes?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+              if (textRw && textRw.length > 20) {
+                rewrittenResult = textRw;
+              }
             }
           } catch(rwErr) {
-            console.warn('[SA-BG] Viết lại bằng Gemini gặp sự cố, kích hoạt fallback giữ bài gốc:', rwErr);
+            console.warn('[SA-BG] Viết lại bài luận gặp sự cố, kích hoạt fallback giữ bài gốc:', rwErr);
           }
         }
 

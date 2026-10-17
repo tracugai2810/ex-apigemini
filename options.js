@@ -347,6 +347,67 @@ function addCustomRewriteModel() {
   renderRewriteModelDropdown(modelName);
 }
 
+function addExtRewriteModel() {
+  const urlInput = document.getElementById('addExtRewriteBaseUrl');
+  const keyInput = document.getElementById('addExtRewriteApiKey');
+  const modelInput = document.getElementById('addExtRewriteModel');
+  if (!urlInput || !keyInput || !modelInput) return;
+
+  const baseUrl = urlInput.value.trim();
+  const apiKey = keyInput.value.trim();
+  const modelName = modelInput.value.trim();
+
+  if (!baseUrl) {
+    showStatus('❌ Vui lòng nhập Base URL!');
+    urlInput.focus();
+    return;
+  }
+  if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+    showStatus('❌ Base URL phải bắt đầu bằng https://');
+    urlInput.focus();
+    return;
+  }
+  if (!apiKey) {
+    showStatus('❌ Vui lòng nhập API Key!');
+    keyInput.focus();
+    return;
+  }
+  if (!modelName) {
+    showStatus('❌ Vui lòng nhập mã model!');
+    modelInput.focus();
+    return;
+  }
+
+  const provName = getProviderNameFromUrl(baseUrl);
+  const extId = 'ext_' + Date.now();
+  const extLabel = `🌐 ${modelName} (${provName})`;
+
+  const newModelItem = {
+    value: extId,
+    model: modelName,
+    label: extLabel,
+    type: 'openai_compatible',
+    baseUrl: baseUrl.replace(/\/+$/, ''),
+    apiKey: apiKey
+  };
+
+  customRewriteGeminiModels.push(newModelItem);
+  if (els.rewriteGeminiModel) els.rewriteGeminiModel.value = extId;
+
+  // Xóa trắng ô nhập sau khi thêm
+  urlInput.value = '';
+  keyInput.value = '';
+  modelInput.value = '';
+
+  chrome.storage.sync.set({
+    customRewriteGeminiModels: customRewriteGeminiModels,
+    hiddenRewriteBuiltinModels: hiddenRewriteBuiltinModels,
+    rewriteGeminiModel: extId
+  }, () => showStatus('✅ Đã thêm model ngoài: ' + modelName));
+
+  renderRewriteModelDropdown(extId);
+}
+
 // ================================
 // === Profile Functions (giữ nguyên) ===
 // ================================
@@ -452,8 +513,11 @@ function loadSettings() {
     // Render custom dropdown
     renderModelDropdown(currentModel);
 
-    // === AI Viết Lại (Gemini): Nạp model & cấu hình ===
-    customRewriteGeminiModels = data.customRewriteGeminiModels || [];
+    // === AI Viết Lại (Gemini & Model Ngoài): Nạp model & cấu hình ===
+    customRewriteGeminiModels = (data.customRewriteGeminiModels || []).map(m => {
+      if (typeof m === 'string') return { value: m, label: '✏️ ' + m };
+      return m;
+    });
     hiddenRewriteBuiltinModels = data.hiddenRewriteBuiltinModels || [];
     let currentRewriteModel = data.rewriteGeminiModel || 'gemini-3.5-flash-lite';
     const isRwBuiltIn = BUILTIN_MODELS.some(m => m.value === currentRewriteModel);
@@ -669,6 +733,21 @@ if (addRwModelInput) {
     if (e.key === 'Enter') {
       e.preventDefault();
       addCustomRewriteModel();
+    }
+  });
+}
+
+const btnAddExtRw = document.getElementById('btnAddExtRewriteModel');
+if (btnAddExtRw) {
+  btnAddExtRw.addEventListener('click', addExtRewriteModel);
+}
+
+const addExtModelInput = document.getElementById('addExtRewriteModel');
+if (addExtModelInput) {
+  addExtModelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addExtRewriteModel();
     }
   });
 }

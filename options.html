@@ -90,12 +90,12 @@
       <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
     </section>
 
-    <!-- AI VIẾT LẠI (GEMINI) -->
+    <!-- AI VIẾT LẠI (GEMINI & MODEL NGOÀI) -->
     <section class="card">
-      <h2>✍️ Cấu hình AI Viết Lại (Gemini)</h2>
+      <h2>✍️ Cấu hình AI Viết Lại (Gemini & Nhà cung cấp khác)</h2>
       <label for="rewriteGeminiApiKey">Gemini API Key (Tùy chọn)</label>
       <input type="password" id="rewriteGeminiApiKey" placeholder="Để trống nếu dùng chung API Key ở trên">
-      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Nếu để trống, tự động dùng chung Gemini API Key ở mục trên.</p>
+      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Dùng khi chọn model Gemini. Nếu để trống, tự động dùng chung Gemini API Key ở mục trên.</p>
       
       <label for="rewriteGeminiModel" style="margin-top:8px;">Model AI Viết Lại</label>
       <input type="hidden" id="rewriteGeminiModel" value="gemini-3.5-flash-lite">
@@ -107,23 +107,49 @@
         <div class="model-dropdown-list" id="rewriteModelDropdownList" style="display:none;">
           <!-- Danh sách model được render bởi JS -->
           <div class="model-add-row">
-            <input type="text" id="addCustomRewriteModelInput" placeholder="Nhập mã model (VD: gemini-3.5-flash-lite...)">
-            <button type="button" id="btnAddCustomRewriteModel" title="Thêm model">➕</button>
+            <input type="text" id="addCustomRewriteModelInput" placeholder="Thêm mã Gemini (VD: gemini-2.0-flash...)">
+            <button type="button" id="btnAddCustomRewriteModel" title="Thêm model Gemini">➕</button>
           </div>
         </div>
       </div>
       <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Model chuyên dụng để viết lại bài luận thành văn phong người thật (đọc prompt từ viet-lai.md).</p>
 
-      <div class="row" style="margin-top:10px;">
+      <!-- KHỐI THÊM MODEL NGOÀI (OpenAI-Compatible: RadoxAI, Claude, DeepSeek...) -->
+      <div style="margin-top:12px;padding:12px;background:#0f172a;border-radius:8px;border:1px dashed #334155;">
+        <div style="font-size:12px;font-weight:600;color:#64ffda;margin-bottom:8px;">
+          ➕ Thêm Model Ngoài (RadoxAI, Claude, OpenAI, DeepSeek...)
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div>
+            <label for="addExtRewriteBaseUrl" style="margin:0 0 4px 0;font-size:11px;">Base URL</label>
+            <input type="text" id="addExtRewriteBaseUrl" placeholder="https://radoxai.com/v1 hoặc https://openrouter.ai/api/v1" style="font-size:12px;padding:7px 10px;">
+          </div>
+          <div class="row" style="gap:8px;">
+            <div class="field">
+              <label for="addExtRewriteApiKey" style="margin:0 0 4px 0;font-size:11px;">API Key</label>
+              <input type="password" id="addExtRewriteApiKey" placeholder="API Key của bên cung cấp" style="font-size:12px;padding:7px 10px;">
+            </div>
+            <div class="field">
+              <label for="addExtRewriteModel" style="margin:0 0 4px 0;font-size:11px;">Mã Model</label>
+              <input type="text" id="addExtRewriteModel" placeholder="claude-sonnet-5" style="font-size:12px;padding:7px 10px;">
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:4px;">
+            <button type="button" id="btnAddExtRewriteModel" style="padding:6px 14px;background:#0f4c75;color:#64ffda;border:1px solid #1b6ca8;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">➕ Thêm vào danh sách</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px;">
         <div class="field">
           <label for="rewriteTemperature">Độ bay bổng (Temperature)</label>
-          <input type="number" id="rewriteTemperature" step="0.05" min="0" max="2" placeholder="Mặc định: 1.0">
-          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Để trống = Mặc định của Gemini.</p>
+          <input type="number" id="rewriteTemperature" step="0.05" min="0" max="2" placeholder="0.6">
+          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Áp dụng cho cả Gemini & Model ngoài (Để trống = Mặc định).</p>
         </div>
         <div class="field">
           <label for="rewriteTopP">Bộ lọc chuẩn xác (Top P)</label>
-          <input type="number" id="rewriteTopP" step="0.05" min="0" max="1" placeholder="Mặc định: 0.95">
-          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Để trống = Mặc định của Gemini.</p>
+          <input type="number" id="rewriteTopP" step="0.05" min="0" max="1" placeholder="0.8">
+          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Áp dụng cho cả Gemini & Model ngoài (Để trống = Mặc định).</p>
         </div>
       </div>
     </section>
