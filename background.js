@@ -426,10 +426,14 @@ const bgAiService = {
 
       const requestBody = {
         model: modelName,
-        messages,
-        temperature: (typeof temperature === 'number' && !isNaN(temperature)) ? temperature : 0.3,
-        top_p: (typeof topP === 'number' && !isNaN(topP)) ? topP : 0.85
+        messages
       };
+      if (typeof temperature === 'number' && !isNaN(temperature)) {
+        requestBody.temperature = temperature;
+      }
+      if (typeof topP === 'number' && !isNaN(topP)) {
+        requestBody.top_p = topP;
+      }
 
       // Tắt suy luận ngầm (thinking) cho Z.AI để tăng tốc phản hồi tối đa, tránh timeout
       if (cleanBase.includes('z.ai') || cleanBase.includes('bigmodel')) {
