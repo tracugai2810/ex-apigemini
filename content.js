@@ -762,7 +762,7 @@ try {
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.get(["sa_running_" + serial], (res) => {
               const run = res?.[("sa_running_" + serial)];
-              if (run && run.startTime && (Date.now() - run.startTime < 120000)) {
+              if (run && run.startTime && (Date.now() - run.startTime < 240000)) {
                 if (run.triggerSource === btnType) {
                   btn.textContent = "⌛...";
                   btn.disabled = true;
@@ -1426,7 +1426,7 @@ try {
           const checkRun = await new Promise(resolve => {
             chrome.storage.local.get(["sa_running_" + serial], res => resolve(res?.["sa_running_" + serial]));
           });
-          if (checkRun && checkRun.startTime && (Date.now() - checkRun.startTime < 120000)) {
+          if (checkRun && checkRun.startTime && (Date.now() - checkRun.startTime < 240000)) {
             self.utils.toast(`⏳ [${serial}] Quẻ này đang được luận, vui lòng đợi xong!`, "warning");
             return;
           }
@@ -1564,7 +1564,7 @@ try {
               Object.keys(allData).forEach(k => {
                 if (k.startsWith("sa_running_")) {
                   const run = allData[k];
-                  if (!run || !run.startTime || Date.now() - run.startTime > 120000) {
+                  if (!run || !run.startTime || Date.now() - run.startTime > 240000) {
                     chrome.storage.local.remove(k);
                     const serial = k.replace("sa_running_", "");
                     const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);

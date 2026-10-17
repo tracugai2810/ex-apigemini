@@ -643,7 +643,7 @@ const bgAiService = {
               }
 
               console.log(`[SA-BG] Calling Gemini Rewrite Model: ${settings.rewriteModel}`);
-              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 60000);
+              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 90000);
               const textRw = (rwRes?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
               if (textRw && textRw.length > 20) {
                 rewrittenResult = textRw;
