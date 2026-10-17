@@ -222,6 +222,7 @@ function bgStopKeepAlive() {
 // === BACKGROUND AI QUE SERVICE (CHẠY TRONG SERVICE WORKER ĐỂ KHÔNG BAO GIỜ BỊ NGẮT KHI ĐỔI TAB / F5) ===
 const bgAiService = {
   _cachedKinhDichMd: null,
+  _cachedVietLaiMd: null,
   FALLBACK_MODELS: [
     "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", 
     "gemini-3-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", 
@@ -232,6 +233,10 @@ const bgAiService = {
     const data = await chrome.storage.sync.get({
       geminiApiKey: '',
       geminiModel: 'gemini-3.7-flash',
+      rewriteGeminiApiKey: '',
+      rewriteGeminiModel: 'gemini-3.5-flash-lite',
+      rewriteTemperature: '',
+      rewriteTopP: '',
       syncSheetUrl: '',
       luchaoUrl: 'https://dshc-luc-hao.vercel.app/',
       customAiBaseUrl: '',
@@ -254,9 +259,18 @@ const bgAiService = {
       customMod = data.glmModel || 'glm-4.7-flash';
     }
 
+    const rwKey = (data.rewriteGeminiApiKey || '').trim() || (data.geminiApiKey || '').trim();
+    const rwModel = (data.rewriteGeminiModel || '').trim() || 'gemini-3.5-flash-lite';
+    const rwTemp = (data.rewriteTemperature !== '' && data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && !isNaN(parseFloat(data.rewriteTemperature))) ? parseFloat(data.rewriteTemperature) : null;
+    const rwTopP = (data.rewriteTopP !== '' && data.rewriteTopP !== undefined && data.rewriteTopP !== null && !isNaN(parseFloat(data.rewriteTopP))) ? parseFloat(data.rewriteTopP) : null;
+
     return {
       apiKey: (data.geminiApiKey || '').trim(),
       model: data.geminiModel || 'gemini-3.7-flash',
+      rewriteApiKey: rwKey,
+      rewriteModel: rwModel,
+      rewriteTemperature: rwTemp,
+      rewriteTopP: rwTopP,
       syncSheetUrl: (data.syncSheetUrl || '').trim(),
       luchaoUrl: data.luchaoUrl || 'https://dshc-luc-hao.vercel.app/',
       customAiBaseUrl: customBase,
@@ -556,24 +570,100 @@ const bgAiService = {
           await this.saveSummary(settings.syncSheetUrl, conversationId, summary, customerName);
         }
 
-        // Lưu kết quả theo triggerSource để không bao giờ ghi đè lẫn nhau
+        // ==============================================================
+        // === BƯỚC 2: TỰ ĐỘNG GỌI GEMINI VIẾT LẠI THEO PHONG CÁCH THỰC TẾ ===
+        // ==============================================================
+        sendStatus(`✍️ Đang viết lại bài luận theo phong cách người thật...`);
+
+        // 1. Tải viet-lai.md từ web (nếu chưa có trong cache ngầm)
+        if (!this._cachedVietLaiMd) {
+          try {
+            const cVl = new AbortController();
+            const tVl = setTimeout(() => cVl.abort(), 8000);
+            const vlRes = await fetch(`${baseUrl}viet-lai.md`, { signal: cVl.signal });
+            clearTimeout(tVl);
+            if (vlRes.ok) this._cachedVietLaiMd = await vlRes.text();
+          } catch(e) {
+            console.log('[SA-BG] Không tải được viet-lai.md từ web:', e.message);
+          }
+        }
+        const vietLaiPrompt = this._cachedVietLaiMd || "";
+
+        let rewrittenResult = null;
+        if (vietLaiPrompt && settings.rewriteApiKey) {
+          try {
+            const rwPayload = {
+              systemInstruction: { parts: [{ text: vietLaiPrompt }] },
+              contents: [{ parts: [{ text: aiResult }] }]
+            };
+            const genConfig = {};
+            if (settings.rewriteTemperature !== null) genConfig.temperature = settings.rewriteTemperature;
+            if (settings.rewriteTopP !== null) genConfig.topP = settings.rewriteTopP;
+            if (Object.keys(genConfig).length > 0) {
+              rwPayload.generationConfig = genConfig;
+            }
+
+            console.log(`[SA-BG] Calling Rewrite Model: ${settings.rewriteModel}`);
+            const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 60000);
+            const textRw = (rwRes?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+            if (textRw && textRw.length > 20) {
+              rewrittenResult = textRw;
+            }
+          } catch(rwErr) {
+            console.warn('[SA-BG] Viết lại bằng Gemini gặp sự cố, kích hoạt fallback giữ bài gốc:', rwErr);
+          }
+        }
+
+        // ==============================================================
+        // === XỬ LÝ KẾT QUẢ VÀ TRẢ VỀ NÚT TƯƠNG ỨNG ===
+        // ==============================================================
         const resKey = `sa_res_${triggerSource}_${serial}`;
-        await chrome.storage.local.set({
-          [resKey]: JSON.stringify({ type: 'claude', content: aiResult, model: usedModelName, triggerSource })
-        });
         await chrome.storage.local.remove('sa_running_' + serial);
 
-        // Broadcast hoàn tất kèm triggerSource
-        broadcastMessage({
-          action: 'AI_QUE_COMPLETED',
-          serial,
-          type: 'claude',
-          content: aiResult,
-          customerName,
-          model: usedModelName,
-          triggerSource
-        });
-        return { success: true, type: 'claude', content: aiResult, model: usedModelName, triggerSource };
+        if (rewrittenResult) {
+          // THÀNH CÔNG CẢ 2 BƯỚC -> NÚT XANH DƯƠNG FB (MỞ FACEBOOK BUSINESS)
+          await chrome.storage.local.set({
+            [resKey]: JSON.stringify({ 
+              type: 'business', 
+              content: rewrittenResult, 
+              rawContent: aiResult, 
+              model: settings.rewriteModel, 
+              triggerSource 
+            })
+          });
+
+          broadcastMessage({
+            action: 'AI_QUE_COMPLETED',
+            serial,
+            type: 'business',
+            content: rewrittenResult,
+            customerName,
+            model: settings.rewriteModel,
+            triggerSource
+          });
+          return { success: true, type: 'business', content: rewrittenResult, model: settings.rewriteModel, triggerSource };
+        } else {
+          // BƯỚC 2 LỖI (FALLBACK) -> NÚT XANH LÁ (BÀI LUẬN GỐC, MỞ CLAUDE NHƯ CŨ)
+          await chrome.storage.local.set({
+            [resKey]: JSON.stringify({ 
+              type: 'claude', 
+              content: aiResult, 
+              model: usedModelName, 
+              triggerSource 
+            })
+          });
+
+          broadcastMessage({
+            action: 'AI_QUE_COMPLETED',
+            serial,
+            type: 'claude',
+            content: aiResult,
+            customerName,
+            model: usedModelName,
+            triggerSource
+          });
+          return { success: true, type: 'claude', content: aiResult, model: usedModelName, triggerSource };
+        }
       }
       throw new Error("AI trả về kết quả rỗng");
     } catch(aiError) {
@@ -640,6 +730,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Đóng popup business khi nhận được lệnh closePopup từ fb-content.js
   if (msg.action === 'closePopup' && sender.tab && sender.tab.windowId) {
     chrome.windows.remove(sender.tab.windowId).catch(() => {});
+    return;
+  }
+
+  // Mở thẳng Facebook Business chat khi bấm nút Xanh dương
+  if (msg.action === 'openBusinessChat') {
+    const sapoTabId = sender.tab ? sender.tab.id : null;
+    if (sapoTabId) {
+      chrome.scripting.executeScript({
+        target: { tabId: sapoTabId, allFrames: true },
+        world: "MAIN",
+        func: () => {
+          let attempts = 0;
+          let timer = setInterval(() => {
+            attempts++;
+            let btns = document.querySelectorAll('span.direct-messenger-fb');
+            let btn = Array.from(btns).find(b => b.offsetWidth > 0 && b.offsetHeight > 0); 
+            if (btn) {
+              clearInterval(timer);
+              btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+              const key = Object.keys(btn).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+              if (key && btn[key] && typeof btn[key].onClick === 'function') {
+                try { btn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) }); } catch(e) {}
+              }
+              btn.click();
+              console.log('[SapoFBExt] Đã bấm nút Facebook Messenger.');
+            } else if (attempts > 12) {
+              clearInterval(timer);
+            }
+          }, 300);
+        }
+      }).catch(err => console.error("Lỗi executeScript click FB:", err));
+    }
     return;
   }
 

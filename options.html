@@ -90,6 +90,44 @@
       <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
     </section>
 
+    <!-- AI VIẾT LẠI (GEMINI) -->
+    <section class="card">
+      <h2>✍️ Cấu hình AI Viết Lại (Gemini)</h2>
+      <label for="rewriteGeminiApiKey">Gemini API Key (Tùy chọn)</label>
+      <input type="password" id="rewriteGeminiApiKey" placeholder="Để trống nếu dùng chung API Key ở trên">
+      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Nếu để trống, tự động dùng chung Gemini API Key ở mục trên.</p>
+      
+      <label for="rewriteGeminiModel" style="margin-top:8px;">Model AI Viết Lại</label>
+      <input type="hidden" id="rewriteGeminiModel" value="gemini-3.5-flash-lite">
+      <div class="model-dropdown-container" id="rewriteModelDropdownContainer">
+        <div class="model-dropdown-toggle" id="rewriteModelDropdownToggle">
+          <span id="rewriteModelDropdownLabel">🏆 Gemini 3.5 Flash Lite — 500 lượt/ngày</span>
+          <span class="model-dropdown-arrow">▾</span>
+        </div>
+        <div class="model-dropdown-list" id="rewriteModelDropdownList" style="display:none;">
+          <!-- Danh sách model được render bởi JS -->
+          <div class="model-add-row">
+            <input type="text" id="addCustomRewriteModelInput" placeholder="Nhập mã model (VD: gemini-3.5-flash-lite...)">
+            <button type="button" id="btnAddCustomRewriteModel" title="Thêm model">➕</button>
+          </div>
+        </div>
+      </div>
+      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Model chuyên dụng để viết lại bài luận thành văn phong người thật (đọc prompt từ viet-lai.md).</p>
+
+      <div class="row" style="margin-top:10px;">
+        <div class="field">
+          <label for="rewriteTemperature">Độ bay bổng (Temperature)</label>
+          <input type="number" id="rewriteTemperature" step="0.05" min="0" max="2" placeholder="Mặc định: 1.0">
+          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Để trống = Mặc định của Gemini.</p>
+        </div>
+        <div class="field">
+          <label for="rewriteTopP">Bộ lọc chuẩn xác (Top P)</label>
+          <input type="number" id="rewriteTopP" step="0.05" min="0" max="1" placeholder="Mặc định: 0.95">
+          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Để trống = Mặc định của Gemini.</p>
+        </div>
+      </div>
+    </section>
+
     <!-- MODEL PHỤ (OpenAI-Compatible) DÀNH CHO NÚT "KHÁC" -->
     <section class="card">
       <h2>🔵 Model Phụ (Z.AI, OpenRouter, DeepSeek...) — Nút "Khác"</h2>

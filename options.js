@@ -38,7 +38,13 @@ const DEFAULTS = {
   customAiSelectedProfileId: 'prof_zai_glm',
   queProvider:     'gemini',
   aiTemperature:   0.3,
-  aiTopP:          0.85
+  aiTopP:          0.85,
+  rewriteGeminiApiKey: '',
+  rewriteGeminiModel: 'gemini-3.5-flash-lite',
+  rewriteTemperature: '',
+  rewriteTopP: '',
+  customRewriteGeminiModels: [],
+  hiddenRewriteBuiltinModels: []
 };
 
 // Danh sách model Gemini mặc định (built-in) — giữ nguyên thứ tự
@@ -211,6 +217,136 @@ function addCustomModel() {
   renderModelDropdown(modelName);
 }
 
+// ============================================
+// === Rewrite Model Dropdown Logic (MỚI) ===
+// ============================================
+
+let customRewriteGeminiModels = [];
+let hiddenRewriteBuiltinModels = [];
+
+function getVisibleRewriteModels() {
+  const visibleBuiltIn = BUILTIN_MODELS.filter(m => !hiddenRewriteBuiltinModels.includes(m.value));
+  return [...visibleBuiltIn, ...customRewriteGeminiModels];
+}
+
+function findRewriteModelLabel(value) {
+  const allModels = [...BUILTIN_MODELS, ...customRewriteGeminiModels];
+  const found = allModels.find(m => m.value === value);
+  return found ? found.label : value;
+}
+
+function renderRewriteModelDropdown(selectedValue) {
+  const listEl = document.getElementById('rewriteModelDropdownList');
+  const labelEl = document.getElementById('rewriteModelDropdownLabel');
+  if (!listEl || !labelEl) return;
+
+  listEl.querySelectorAll('.model-dropdown-item').forEach(el => el.remove());
+  const addRow = listEl.querySelector('.model-add-row');
+  const allModels = getVisibleRewriteModels();
+
+  allModels.forEach(m => {
+    const item = document.createElement('div');
+    item.className = 'model-dropdown-item' + (m.value === selectedValue ? ' selected' : '');
+    item.dataset.value = m.value;
+
+    const label = document.createElement('span');
+    label.className = 'model-item-label';
+    label.textContent = m.label;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'model-delete-btn';
+    deleteBtn.title = 'Xóa model này';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteRewriteModel(m.value);
+    });
+
+    item.appendChild(label);
+    item.appendChild(deleteBtn);
+    item.addEventListener('click', () => selectRewriteModel(m.value, m.label));
+
+    listEl.insertBefore(item, addRow);
+  });
+
+  labelEl.textContent = findRewriteModelLabel(selectedValue);
+}
+
+function selectRewriteModel(value, label) {
+  if (els.rewriteGeminiModel) els.rewriteGeminiModel.value = value;
+  const labelEl = document.getElementById('rewriteModelDropdownLabel');
+  if (labelEl) labelEl.textContent = label;
+  const listEl = document.getElementById('rewriteModelDropdownList');
+  if (listEl) listEl.style.display = 'none';
+  renderRewriteModelDropdown(value);
+}
+
+function deleteRewriteModel(value) {
+  const allModels = getVisibleRewriteModels();
+  if (allModels.length <= 1) {
+    showStatus('❌ Cần giữ lại ít nhất 1 model!');
+    return;
+  }
+  const isBuiltIn = BUILTIN_MODELS.some(m => m.value === value);
+  if (isBuiltIn) {
+    if (!hiddenRewriteBuiltinModels.includes(value)) hiddenRewriteBuiltinModels.push(value);
+  } else {
+    customRewriteGeminiModels = customRewriteGeminiModels.filter(m => m.value !== value);
+  }
+
+  let currentSelected = els.rewriteGeminiModel ? els.rewriteGeminiModel.value : 'gemini-3.5-flash-lite';
+  if (currentSelected === value) {
+    const remaining = getVisibleRewriteModels();
+    if (remaining.length > 0) {
+      currentSelected = remaining[0].value;
+      if (els.rewriteGeminiModel) els.rewriteGeminiModel.value = currentSelected;
+    }
+  }
+
+  chrome.storage.sync.set({
+    customRewriteGeminiModels: customRewriteGeminiModels,
+    hiddenRewriteBuiltinModels: hiddenRewriteBuiltinModels,
+    rewriteGeminiModel: currentSelected
+  }, () => showStatus('🗑️ Đã xóa model viết lại'));
+
+  renderRewriteModelDropdown(currentSelected);
+}
+
+function addCustomRewriteModel() {
+  const input = document.getElementById('addCustomRewriteModelInput');
+  if (!input) return;
+  const modelName = input.value.trim();
+  if (!modelName) {
+    showStatus('❌ Vui lòng nhập tên model!');
+    return;
+  }
+  const isBuiltIn = BUILTIN_MODELS.some(m => m.value === modelName);
+  const isCustomExists = customRewriteGeminiModels.some(m => m.value === modelName);
+
+  if (isBuiltIn) {
+    hiddenRewriteBuiltinModels = hiddenRewriteBuiltinModels.filter(v => v !== modelName);
+  } else if (!isCustomExists) {
+    customRewriteGeminiModels.push({ value: modelName, label: '✏️ ' + modelName });
+  } else {
+    showStatus('⚠️ Model này đã tồn tại trong danh sách!');
+    selectRewriteModel(modelName, findRewriteModelLabel(modelName));
+    input.value = '';
+    return;
+  }
+
+  if (els.rewriteGeminiModel) els.rewriteGeminiModel.value = modelName;
+  input.value = '';
+
+  chrome.storage.sync.set({
+    customRewriteGeminiModels: customRewriteGeminiModels,
+    hiddenRewriteBuiltinModels: hiddenRewriteBuiltinModels,
+    rewriteGeminiModel: modelName
+  }, () => showStatus('✅ Đã thêm model viết lại: ' + modelName));
+
+  renderRewriteModelDropdown(modelName);
+}
+
 // ================================
 // === Profile Functions (giữ nguyên) ===
 // ================================
@@ -316,6 +452,25 @@ function loadSettings() {
     // Render custom dropdown
     renderModelDropdown(currentModel);
 
+    // === AI Viết Lại (Gemini): Nạp model & cấu hình ===
+    customRewriteGeminiModels = data.customRewriteGeminiModels || [];
+    hiddenRewriteBuiltinModels = data.hiddenRewriteBuiltinModels || [];
+    let currentRewriteModel = data.rewriteGeminiModel || 'gemini-3.5-flash-lite';
+    const isRwBuiltIn = BUILTIN_MODELS.some(m => m.value === currentRewriteModel);
+    const isRwCustom = customRewriteGeminiModels.some(m => m.value === currentRewriteModel);
+    if (!isRwBuiltIn && !isRwCustom && currentRewriteModel) {
+      customRewriteGeminiModels.push({ value: currentRewriteModel, label: '✏️ ' + currentRewriteModel });
+    }
+    if (isRwBuiltIn && hiddenRewriteBuiltinModels.includes(currentRewriteModel)) {
+      hiddenRewriteBuiltinModels = hiddenRewriteBuiltinModels.filter(v => v !== currentRewriteModel);
+    }
+    if (els.rewriteGeminiModel) els.rewriteGeminiModel.value = currentRewriteModel;
+    renderRewriteModelDropdown(currentRewriteModel);
+
+    if (els.rewriteGeminiApiKey) els.rewriteGeminiApiKey.value = data.rewriteGeminiApiKey || '';
+    if (els.rewriteTemperature) els.rewriteTemperature.value = (data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && data.rewriteTemperature !== '') ? data.rewriteTemperature : '';
+    if (els.rewriteTopP) els.rewriteTopP.value = (data.rewriteTopP !== undefined && data.rewriteTopP !== null && data.rewriteTopP !== '') ? data.rewriteTopP : '';
+
     // === Model Phụ: Nạp danh sách Profiles (Bộ URL + Key + Model) ===
     let profiles = data.customAiProfiles;
     if (!Array.isArray(profiles) || profiles.length === 0) {
@@ -398,6 +553,15 @@ function saveSettings() {
   let topPVal = parseFloat(els.aiTopP ? els.aiTopP.value : '');
   if (isNaN(topPVal) || topPVal < 0 || topPVal > 1) topPVal = DEFAULTS.aiTopP;
 
+  const selectedRewriteModel = els.rewriteGeminiModel ? els.rewriteGeminiModel.value : 'gemini-3.5-flash-lite';
+  const rwApiKey = (els.rewriteGeminiApiKey ? els.rewriteGeminiApiKey.value : '').trim();
+  const rwTempStr = (els.rewriteTemperature ? els.rewriteTemperature.value : '').trim();
+  const rwTopPStr = (els.rewriteTopP ? els.rewriteTopP.value : '').trim();
+  let rwTemp = rwTempStr !== '' ? parseFloat(rwTempStr) : '';
+  let rwTopP = rwTopPStr !== '' ? parseFloat(rwTopPStr) : '';
+  if (rwTemp !== '' && (isNaN(rwTemp) || rwTemp < 0 || rwTemp > 2)) rwTemp = '';
+  if (rwTopP !== '' && (isNaN(rwTopP) || rwTopP < 0 || rwTopP > 1)) rwTopP = '';
+
   chrome.storage.sync.set({
     geminiUrl: gUrl, geminiWidth: gW, geminiHeight: gH,
     claudeUrl: cUrl, claudeWidth: cW, claudeHeight: cH,
@@ -408,6 +572,12 @@ function saveSettings() {
     geminiCustomModel: '',
     customGeminiModels: customGeminiModels,
     hiddenBuiltinModels: hiddenBuiltinModels,
+    rewriteGeminiApiKey: rwApiKey,
+    rewriteGeminiModel: selectedRewriteModel,
+    rewriteTemperature: rwTemp,
+    rewriteTopP: rwTopP,
+    customRewriteGeminiModels: customRewriteGeminiModels,
+    hiddenRewriteBuiltinModels: hiddenRewriteBuiltinModels,
     syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : ''),
     gasBankingUrl: (els.gasBankingUrl ? els.gasBankingUrl.value.trim() : ''),
     customAiBaseUrl: customAiBaseUrlVal,
@@ -462,6 +632,43 @@ if (addModelInput) {
     if (e.key === 'Enter') {
       e.preventDefault();
       addCustomModel();
+    }
+  });
+}
+
+// ===============================================
+// === Event Listeners: Rewrite Model Dropdown ===
+// ===============================================
+
+const rewriteModelToggleEl = document.getElementById('rewriteModelDropdownToggle');
+if (rewriteModelToggleEl) {
+  rewriteModelToggleEl.addEventListener('click', () => {
+    const listEl = document.getElementById('rewriteModelDropdownList');
+    if (listEl) {
+      listEl.style.display = listEl.style.display === 'none' ? 'block' : 'none';
+    }
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const container = document.getElementById('rewriteModelDropdownContainer');
+  const listEl = document.getElementById('rewriteModelDropdownList');
+  if (container && listEl && !container.contains(e.target)) {
+    listEl.style.display = 'none';
+  }
+});
+
+const btnAddRwModel = document.getElementById('btnAddCustomRewriteModel');
+if (btnAddRwModel) {
+  btnAddRwModel.addEventListener('click', addCustomRewriteModel);
+}
+
+const addRwModelInput = document.getElementById('addCustomRewriteModelInput');
+if (addRwModelInput) {
+  addRwModelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addCustomRewriteModel();
     }
   });
 }

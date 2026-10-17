@@ -689,30 +689,57 @@ try {
               btn.textContent = "Copy";
               btn.disabled = false;
               btn.style.opacity = "1";
-              if (saved.type === 'claude') {
+              if (saved.type === 'business') {
+                 btn.style.background = "linear-gradient(135deg, #0084ff, #00c6ff)";
+                 btn.style.boxShadow = "0 0 15px rgba(0, 132, 255, 0.6)";
+              } else if (saved.type === 'claude') {
                  btn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+                 btn.style.boxShadow = "0 0 15px rgba(34, 197, 94, 0.6)";
               } else {
                  btn.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
+                 btn.style.boxShadow = "0 0 15px rgba(245, 158, 11, 0.6)";
               }
               btn.style.color = "white";
               btn.onclick = async (e) => {
                  e.stopPropagation(); e.preventDefault();
                  try {
                    await navigator.clipboard.writeText(saved.content);
-                   const popupAction = (saved.type === 'claude') ? 'openClaudeDirectPopup' : 'openGeminiPopup';
-                   const toastMsg = (saved.type === 'claude')
-                     ? `📋 Đã copy bài luận (${saved.model || ''}) và mở Claude...`
-                     : `📋 Đã copy quẻ thô và mở Gemini...`;
-                   SapoAuto_v1.utils.toast(toastMsg, "success");
-                   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-                     chrome.runtime.sendMessage({ 
-                       action: popupAction,
-                       conversationId: SapoAuto_v1.utils.getActiveConversationId()
-                     });
+                   if (saved.type === 'business') {
+                     SapoAuto_v1.utils.toast(`📋 Đã copy bài viết lại (${saved.model || 'Gemini'}) & mở Facebook Business...`, "success");
+                     // Thử click nút FB Messenger trực tiếp trong frame nếu có
+                     try {
+                       const fbBtn = document.querySelector('span.direct-messenger-fb');
+                       if (fbBtn && fbBtn.offsetWidth > 0) {
+                         const key = Object.keys(fbBtn).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+                         if (key && fbBtn[key] && typeof fbBtn[key].onClick === 'function') {
+                           fbBtn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) });
+                         }
+                         fbBtn.click();
+                       }
+                     } catch(fbe) {}
+                     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                       chrome.runtime.sendMessage({ 
+                         action: 'openBusinessChat',
+                         conversationId: SapoAuto_v1.utils.getActiveConversationId()
+                       });
+                     }
+                   } else {
+                     const popupAction = (saved.type === 'claude') ? 'openClaudeDirectPopup' : 'openGeminiPopup';
+                     const toastMsg = (saved.type === 'claude')
+                       ? `📋 Đã copy bài luận (${saved.model || ''}) và mở Claude...`
+                       : `📋 Đã copy quẻ thô và mở Gemini...`;
+                     SapoAuto_v1.utils.toast(toastMsg, "success");
+                     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                       chrome.runtime.sendMessage({ 
+                         action: popupAction,
+                         conversationId: SapoAuto_v1.utils.getActiveConversationId()
+                       });
+                     }
                    }
                    btn.textContent = originalText || (btnType === 'chu' ? "Khác" : "Gemini");
                    btn.style.background = "";
                    btn.style.color = "";
+                   btn.style.boxShadow = "";
                    btn.disabled = false;
                    if (typeof originalOnClick === 'function') {
                      btn.onclick = originalOnClick;
@@ -1619,10 +1646,12 @@ try {
             }
 
             const modelTag = model ? ` (${model})` : '';
-            if (type === 'claude') {
-              self.utils.toast(`✅ [${customerName || serial}] ĐÃ LUẬN XONG${modelTag}! Bấm Copy để mở Claude.`, "success", 5000);
+            if (type === 'business') {
+              self.utils.toast(`✅ [${customerName || serial}] ĐÃ VIẾT LẠI XONG${modelTag}! Bấm nút xanh dương để mở Facebook chat.`, "success", 5000);
+            } else if (type === 'claude') {
+              self.utils.toast(`✅ [${customerName || serial}] ĐÃ LUẬN XONG${modelTag}! Bấm nút xanh lá để mở Claude.`, "info", 5000);
             } else {
-              self.utils.toast(`⚠️ [${customerName || serial}] AI quá tải/lỗi! Đã lấy quẻ thô, bấm Copy để mở Gemini web.`, "warning", 5000);
+              self.utils.toast(`⚠️ [${customerName || serial}] AI quá tải/lỗi! Đã lấy quẻ thô, bấm nút cam để mở Gemini web.`, "warning", 5000);
             }
           } else if (msg.action === 'AI_QUE_FAILED') {
             const { serial, error, customerName, triggerSource = 'luan' } = msg;
