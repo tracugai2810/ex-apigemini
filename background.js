@@ -622,7 +622,7 @@ const bgAiService = {
                 settings.rewriteModel,
                 settings.rewriteApiKey,
                 aiResult,
-                90000,
+                120000,
                 vietLaiPrompt,
                 settings.rewriteTemperature,
                 settings.rewriteTopP
@@ -643,7 +643,7 @@ const bgAiService = {
               }
 
               console.log(`[SA-BG] Calling Gemini Rewrite Model: ${settings.rewriteModel}`);
-              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 90000);
+              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 120000);
               const textRw = (rwRes?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
               if (textRw && textRw.length > 20) {
                 rewrittenResult = textRw;
@@ -727,6 +727,14 @@ const bgAiService = {
     }
   } finally {
     bgStopKeepAlive();
+    try {
+      const portName = 'sa_keepalive_' + serial;
+      if (typeof _bgKeepAlivePorts !== 'undefined' && _bgKeepAlivePorts.has(portName)) {
+        const p = _bgKeepAlivePorts.get(portName);
+        if (p) p.disconnect();
+        _bgKeepAlivePorts.delete(portName);
+      }
+    } catch(e) {}
   }
 }
 };
@@ -736,6 +744,26 @@ function broadcastMessage(msg) {
     if (tabs && tabs.length > 0) {
       tabs.forEach(tab => {
         chrome.tabs.sendMessage(tab.id, msg).catch(() => {});
+      });
+    }
+  });
+}
+
+// === QUẢN LÝ KẾT NỐI PORT KEEP-ALIVE TỪ CONTENT SCRIPT (CHỐNG CHROME SERVICE WORKER NGỦ ĐÔNG) ===
+const _bgKeepAlivePorts = new Map();
+if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onConnect) {
+  chrome.runtime.onConnect.addListener((port) => {
+    if (port && port.name && port.name.startsWith('sa_keepalive_')) {
+      _bgKeepAlivePorts.set(port.name, port);
+      console.log(`[SA-BG] 🔌 Đã kết nối Port giữ nhịp tim: ${port.name} (Active: ${_bgKeepAlivePorts.size})`);
+      
+      port.onMessage.addListener(() => {
+        // Nhận ping nhẹ định kỳ từ tab chat để Chrome MV3 luôn ghi nhận Service Worker đang bận
+      });
+
+      port.onDisconnect.addListener(() => {
+        _bgKeepAlivePorts.delete(port.name);
+        console.log(`[SA-BG] 🔌 Đã ngắt Port giữ nhịp tim: ${port.name} (Active: ${_bgKeepAlivePorts.size})`);
       });
     }
   });

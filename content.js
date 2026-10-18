@@ -64,7 +64,8 @@ try {
       activeTextGroups: new Map(), // FIX BUG FOLLOW TAB: Lưu cặp div -> sa-group để cleanup
       textKeys: new Set(), // Track theo nội dung text — tránh re-create khi Sapo re-render
       myToken: "",         // Token xác thực Sapo (bắt từ inject.js)
-      pageMap: new Map()   // Map<conversationId, {pageId, fbPageId}> — lưu per-conversation, tránh ghi đè loạn
+      pageMap: new Map(),  // Map<conversationId, {pageId, fbPageId}> — lưu per-conversation, tránh ghi đè loạn
+      activePorts: new Map() // Map<serial, {port, timer}> — giữ nhịp tim Port với Background
     },
 
     // 2b. LƯU / ĐỌC SERI TỪ STORAGE (Persistent, per-image — không chia sẻ giữa các ảnh khác nhau)
@@ -428,6 +429,51 @@ try {
       getActiveConversationId() {
         const urlParams = new URLSearchParams(window.location.search);
         return urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
+      },
+
+      startKeepAlivePort(serial) {
+        const self = SapoAuto_v1;
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.connect) {
+            self.STATE.activePorts = self.STATE.activePorts || new Map();
+            if (self.STATE.activePorts.has(serial)) {
+              try {
+                const old = self.STATE.activePorts.get(serial);
+                if (old && old.timer) clearInterval(old.timer);
+                if (old && old.port) old.port.disconnect();
+              } catch(e) {}
+              self.STATE.activePorts.delete(serial);
+            }
+
+            const port = chrome.runtime.connect({ name: 'sa_keepalive_' + serial });
+            const timer = setInterval(() => {
+              try { port.postMessage({ ping: true }); } catch(e) { clearInterval(timer); }
+            }, 20000);
+
+            port.onDisconnect.addListener(() => {
+              clearInterval(timer);
+              if (self.STATE?.activePorts) self.STATE.activePorts.delete(serial);
+            });
+
+            self.STATE.activePorts.set(serial, { port, timer });
+          }
+        } catch(e) {
+          console.warn('[SA] Lỗi mở port keep-alive:', e);
+        }
+      },
+
+      stopKeepAlivePort(serial) {
+        const self = SapoAuto_v1;
+        try {
+          if (self.STATE?.activePorts && self.STATE.activePorts.has(serial)) {
+            const item = self.STATE.activePorts.get(serial);
+            if (item) {
+              if (item.timer) clearInterval(item.timer);
+              if (item.port) item.port.disconnect();
+            }
+            self.STATE.activePorts.delete(serial);
+          }
+        } catch(e) {}
       }
     },
 
@@ -1463,6 +1509,9 @@ try {
 
         self.utils.toast(`⌛ [${capturedCustomerName || serial}] Đang gọi AI (${currentModel})...`, "info");
 
+        // Mở đường truyền Port giữ nhịp tim trực tiếp với Background (chống Chrome ngủ đông)
+        self.utils.startKeepAlivePort(serial);
+
         // Gửi lệnh xử lý sang Background Service Worker (Không bao giờ bị tắt khi đổi tab hay F5)
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
           chrome.runtime.sendMessage({
@@ -1567,6 +1616,7 @@ try {
                   if (!run || !run.startTime || Date.now() - run.startTime > 240000) {
                     chrome.storage.local.remove(k);
                     const serial = k.replace("sa_running_", "");
+                    self.utils.stopKeepAlivePort(serial);
                     const luanBtns = document.querySelectorAll(`.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`);
                     luanBtns.forEach(b => {
                       if (b.textContent === "Copy") {
@@ -1613,6 +1663,7 @@ try {
             self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
           } else if (msg.action === 'AI_QUE_COMPLETED') {
             const { serial, type, content, customerName, model, triggerSource = 'luan' } = msg;
+            self.utils.stopKeepAlivePort(serial);
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
               chrome.storage.local.remove("sa_running_" + serial);
             }
@@ -1655,6 +1706,7 @@ try {
             }
           } else if (msg.action === 'AI_QUE_FAILED') {
             const { serial, error, customerName, triggerSource = 'luan' } = msg;
+            self.utils.stopKeepAlivePort(serial);
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
               chrome.storage.local.remove("sa_running_" + serial);
             }
