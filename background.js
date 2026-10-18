@@ -51,6 +51,82 @@ function getThreadKey(urlStr) {
   }
 }
 
+// === BỘ NHỚ TOÀN CỤC CHỐNG MỞ TRÙNG POPUP BUSINESS FACEBOOK (DEBOUNCE 2.5s) ===
+const _recentPopupCreations = new Map();
+
+function createNewPopup(fbUrl, sapoTab, threadKey, sapoUrl, offsetIndex) {
+  chrome.storage.sync.get(DEFAULTS, (settings) => {
+    function createWindow(left, top, width, height) {
+      const options = {
+        url: fbUrl,
+        type: 'popup',
+        width: Math.round(width || settings.businessWidth),
+        height: Math.round(height || settings.businessHeight)
+      };
+      if (left !== undefined && top !== undefined) {
+        options.left = Math.round(left);
+        options.top = Math.round(top);
+      }
+      chrome.windows.create(options, async function(win) {
+        await savePopupWindow(threadKey, win.id, sapoUrl);
+        console.log(`[SapoFBExt v19] Business Popup created for ${threadKey}`);
+      });
+    }
+
+    if (sapoTab && sapoTab.windowId) {
+      chrome.windows.get(sapoTab.windowId, function(sapoWin) {
+        if (!chrome.runtime.lastError && sapoWin) {
+          const sapoW = sapoWin.width;
+          const sapoH = sapoWin.height;
+          let popupW = settings.businessWidth; 
+          let popupH = settings.businessHeight; 
+
+          const offset = (offsetIndex % 5) * 30;
+          const left = sapoWin.left + (sapoW - popupW) / 2 + offset;
+          const top = sapoWin.top + 80 + offset; 
+          
+          createWindow(left, top, popupW, popupH);
+        } else {
+          createWindow();
+        }
+      });
+    } else {
+      createWindow();
+    }
+  });
+}
+
+async function openPopupWindow(fbUrl, sapoTab) {
+  const threadKey = getThreadKey(fbUrl);
+  const now = Date.now();
+  if (_recentPopupCreations.has(threadKey) && (now - _recentPopupCreations.get(threadKey) < 2500)) {
+    console.log(`[SapoFBExt] Bỏ qua mở popup trùng cho ${threadKey}`);
+    return;
+  }
+  _recentPopupCreations.set(threadKey, now);
+  setTimeout(() => _recentPopupCreations.delete(threadKey), 10000);
+
+  const popupWindows = await getPopupWindows();
+  const existingData = popupWindows[threadKey];
+  const sapoUrl = sapoTab ? sapoTab.url : null;
+
+  if (existingData && existingData.windowId) {
+    chrome.windows.get(existingData.windowId, async function(win) {
+      if (chrome.runtime.lastError || !win) {
+        await removePopupWindowByWindowId(existingData.windowId);
+        createNewPopup(fbUrl, sapoTab, threadKey, sapoUrl, Object.keys(popupWindows).length);
+      } else {
+        chrome.windows.update(existingData.windowId, { focused: true, drawAttention: true, state: 'normal' });
+        if (sapoUrl) {
+          await savePopupWindow(threadKey, existingData.windowId, sapoUrl);
+        }
+      }
+    });
+  } else {
+    createNewPopup(fbUrl, sapoTab, threadKey, sapoUrl, Object.keys(popupWindows).length);
+  }
+}
+
 chrome.tabs.onCreated.addListener(async function(newTab) {
   const popupWindows = await getPopupWindows();
   const allPopupIds = Object.values(popupWindows).map(d => d.windowId);
@@ -71,81 +147,6 @@ chrome.tabs.onCreated.addListener(async function(newTab) {
       } else {
         chrome.tabs.remove(tabId).catch(() => {});
         openPopupWindow(url);
-      }
-    });
-  }
-
-  const _recentPopupCreations = new Map();
-
-  async function openPopupWindow(fbUrl, sapoTab) {
-    const threadKey = getThreadKey(fbUrl);
-    const now = Date.now();
-    if (_recentPopupCreations.has(threadKey) && (now - _recentPopupCreations.get(threadKey) < 2500)) {
-      console.log(`[SapoFBExt] Bỏ qua mở popup trùng cho ${threadKey}`);
-      return;
-    }
-    _recentPopupCreations.set(threadKey, now);
-    setTimeout(() => _recentPopupCreations.delete(threadKey), 10000);
-
-    const popupWindows = await getPopupWindows();
-    const existingData = popupWindows[threadKey];
-    const sapoUrl = sapoTab ? sapoTab.url : null;
-
-    if (existingData && existingData.windowId) {
-      chrome.windows.get(existingData.windowId, async function(win) {
-        if (chrome.runtime.lastError || !win) {
-          await removePopupWindowByWindowId(existingData.windowId);
-          createNewPopup(fbUrl, sapoTab, threadKey, sapoUrl, Object.keys(popupWindows).length);
-        } else {
-          chrome.windows.update(existingData.windowId, { focused: true, drawAttention: true, state: 'normal' });
-          if (sapoUrl) {
-            await savePopupWindow(threadKey, existingData.windowId, sapoUrl);
-          }
-        }
-      });
-    } else {
-      createNewPopup(fbUrl, sapoTab, threadKey, sapoUrl, Object.keys(popupWindows).length);
-    }
-  }
-
-  function createNewPopup(fbUrl, sapoTab, threadKey, sapoUrl, offsetIndex) {
-    chrome.storage.sync.get(DEFAULTS, (settings) => {
-      function createWindow(left, top, width, height) {
-        const options = {
-          url: fbUrl,
-          type: 'popup',
-          width: Math.round(width || settings.businessWidth),
-          height: Math.round(height || settings.businessHeight)
-        };
-        if (left !== undefined && top !== undefined) {
-          options.left = Math.round(left);
-          options.top = Math.round(top);
-        }
-        chrome.windows.create(options, async function(win) {
-          await savePopupWindow(threadKey, win.id, sapoUrl);
-          console.log(`[SapoFBExt v19] Business Popup created for ${threadKey}`);
-        });
-      }
-
-      if (sapoTab && sapoTab.windowId) {
-        chrome.windows.get(sapoTab.windowId, function(sapoWin) {
-          if (!chrome.runtime.lastError && sapoWin) {
-            const sapoW = sapoWin.width;
-            const sapoH = sapoWin.height;
-            let popupW = settings.businessWidth; 
-            let popupH = settings.businessHeight; 
-
-            const offset = (offsetIndex % 5) * 30;
-            const left = sapoWin.left + (sapoW - popupW) / 2 + offset;
-            const top = sapoWin.top + 80 + offset; 
-            
-            createWindow(left, top, popupW, popupH);
-          } else {
-            createWindow();
-          }
-        });
-      } else {
-        createWindow();
       }
     });
   }
@@ -826,14 +827,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             let btn = Array.from(btns).find(b => b.offsetWidth > 0 && b.offsetHeight > 0); 
             if (btn) {
               clearInterval(timer);
-              if (window.__saFbClickLock && Date.now() - window.__saFbClickLock < 2000) return;
-              window.__saFbClickLock = Date.now();
+              try {
+                if (window.top && window.top.__saFbClickLock && Date.now() - window.top.__saFbClickLock < 2500) return;
+                if (window.top) window.top.__saFbClickLock = Date.now();
+              } catch(e) {
+                if (window.__saFbClickLock && Date.now() - window.__saFbClickLock < 2500) return;
+                window.__saFbClickLock = Date.now();
+              }
               btn.scrollIntoView({ block: 'center', behavior: 'instant' });
               const key = Object.keys(btn).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+              let reactClicked = false;
               if (key && btn[key] && typeof btn[key].onClick === 'function') {
-                try { btn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) }); } catch(e) {}
+                try {
+                  btn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) });
+                  reactClicked = true;
+                } catch(e) {}
               }
-              btn.click();
+              if (!reactClicked) {
+                btn.click();
+              }
               console.log('[SapoFBExt] Đã bấm nút Facebook Messenger.');
             } else if (attempts > 12) {
               clearInterval(timer);
@@ -1158,17 +1170,28 @@ chrome.windows.onRemoved.addListener(async function(windowId) {
                   
                   if (btn) {
                      clearInterval(timer); // Tắt loop ngay lập tức
-                     if (window.__saFbClickLock && Date.now() - window.__saFbClickLock < 2000) return;
-                     window.__saFbClickLock = Date.now();
+                     try {
+                       if (window.top && window.top.__saFbClickLock && Date.now() - window.top.__saFbClickLock < 2500) return;
+                       if (window.top) window.top.__saFbClickLock = Date.now();
+                     } catch(e) {
+                       if (window.__saFbClickLock && Date.now() - window.__saFbClickLock < 2500) return;
+                       window.__saFbClickLock = Date.now();
+                     }
                      btn.scrollIntoView({ block: 'center', behavior: 'instant' });
                      
                      // Kích hoạt React onClick
                      const key = Object.keys(btn).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+                     let reactClicked = false;
                      if (key && btn[key] && typeof btn[key].onClick === 'function') {
-                       try { btn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) }); } catch(e) {}
+                       try { 
+                         btn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) }); 
+                         reactClicked = true;
+                       } catch(e) {}
                      }
                      // Dự phòng Native click
-                     btn.click();
+                     if (!reactClicked) {
+                       btn.click();
+                     }
                      console.log('[SapoFBExt] Đã ra lệnh CLICK FB sau khi đợi load.');
                   } else if (attempts > 15) { 
                      // Quá 7.5 giây không thấy nút thì bỏ cuộc

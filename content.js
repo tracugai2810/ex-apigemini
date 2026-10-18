@@ -758,10 +758,16 @@ try {
                        const fbBtn = document.querySelector('span.direct-messenger-fb');
                        if (fbBtn && fbBtn.offsetWidth > 0) {
                          const key = Object.keys(fbBtn).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+                         let reactClicked = false;
                          if (key && fbBtn[key] && typeof fbBtn[key].onClick === 'function') {
-                           fbBtn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) });
+                           try {
+                             fbBtn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) });
+                             reactClicked = true;
+                           } catch(e) {}
                          }
-                         fbBtn.click();
+                         if (!reactClicked) {
+                           fbBtn.click();
+                         }
                          clickedDirectly = true;
                        }
                      } catch(fbe) {}
