@@ -75,8 +75,18 @@ chrome.tabs.onCreated.addListener(async function(newTab) {
     });
   }
 
+  const _recentPopupCreations = new Map();
+
   async function openPopupWindow(fbUrl, sapoTab) {
     const threadKey = getThreadKey(fbUrl);
+    const now = Date.now();
+    if (_recentPopupCreations.has(threadKey) && (now - _recentPopupCreations.get(threadKey) < 2500)) {
+      console.log(`[SapoFBExt] Bỏ qua mở popup trùng cho ${threadKey}`);
+      return;
+    }
+    _recentPopupCreations.set(threadKey, now);
+    setTimeout(() => _recentPopupCreations.delete(threadKey), 10000);
+
     const popupWindows = await getPopupWindows();
     const existingData = popupWindows[threadKey];
     const sapoUrl = sapoTab ? sapoTab.url : null;
@@ -816,6 +826,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             let btn = Array.from(btns).find(b => b.offsetWidth > 0 && b.offsetHeight > 0); 
             if (btn) {
               clearInterval(timer);
+              if (window.__saFbClickLock && Date.now() - window.__saFbClickLock < 2000) return;
+              window.__saFbClickLock = Date.now();
               btn.scrollIntoView({ block: 'center', behavior: 'instant' });
               const key = Object.keys(btn).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
               if (key && btn[key] && typeof btn[key].onClick === 'function') {
@@ -1146,6 +1158,8 @@ chrome.windows.onRemoved.addListener(async function(windowId) {
                   
                   if (btn) {
                      clearInterval(timer); // Tắt loop ngay lập tức
+                     if (window.__saFbClickLock && Date.now() - window.__saFbClickLock < 2000) return;
+                     window.__saFbClickLock = Date.now();
                      btn.scrollIntoView({ block: 'center', behavior: 'instant' });
                      
                      // Kích hoạt React onClick

@@ -753,6 +753,7 @@ try {
                    if (saved.type === 'business') {
                      SapoAuto_v1.utils.toast(`📋 Đã copy bài viết lại (${saved.model || 'Gemini'}) & mở Facebook Business...`, "success");
                      // Thử click nút FB Messenger trực tiếp trong frame nếu có
+                     let clickedDirectly = false;
                      try {
                        const fbBtn = document.querySelector('span.direct-messenger-fb');
                        if (fbBtn && fbBtn.offsetWidth > 0) {
@@ -761,9 +762,10 @@ try {
                            fbBtn[key].onClick({ preventDefault: () => {}, stopPropagation: () => {}, nativeEvent: new MouseEvent('click', { bubbles: true }) });
                          }
                          fbBtn.click();
+                         clickedDirectly = true;
                        }
                      } catch(fbe) {}
-                     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                     if (!clickedDirectly && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
                        chrome.runtime.sendMessage({ 
                          action: 'openBusinessChat',
                          conversationId: SapoAuto_v1.utils.getActiveConversationId()
