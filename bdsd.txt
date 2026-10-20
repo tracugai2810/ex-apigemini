@@ -99,31 +99,42 @@ function initSheets() {
 // 3. HÀM CHÍNH TRIGGER QUÉT 24/7 (Set 1 phút/lần)
 // ============================================
 function checkFundNow() {
-  const store = PropertiesService.getScriptProperties();
-  const timeNow = new Date().toLocaleString("vi-VN");
-  Logger.log("=== 🚀 BẮT ĐẦU CHU KỲ QUÉT [" + timeNow + "] ===");
-
-  // BƯỚC 1: Quét hội thoại Sapo Mobile TRƯỚC để nạp khách mới vào Sheet
-  try {
-    scanMobileTaggedConversations_();
-  } catch (eScan) {
-    Logger.log("❌ Lỗi quét Sapo Mobile: " + eScan.message);
+  const lock = LockService.getScriptLock();
+  // Chờ tối đa 1 giây để lấy khóa. Nếu chu kỳ trước đang chạy dở (mạng lag/chưa xong) thì bỏ qua chu kỳ này
+  if (!lock.tryLock(1000)) {
+    Logger.log("⏳ [BỎ QUA] Chu kỳ trước vẫn đang xử lý (có thể do mạng lag). Bỏ qua chu kỳ này để chống chạy đè và tránh tạo trùng đơn.");
+    return;
   }
 
-  // BƯỚC 2: Quét biến động VPBank -> Tự tạo đơn Sapo (1 lần duy nhất) + Bắn Zalo
   try {
-    const vpbankEntries = fetchVPBankEntries_();
-    if (vpbankEntries && vpbankEntries.length > 0) {
-      Logger.log("🏦 VPBank: Đọc được " + vpbankEntries.length + " giao dịch gần nhất.");
-      processSource_(vpbankEntries, store, "VPBANK");
-    } else {
-      Logger.log("🏦 VPBank: Không có giao dịch mới.");
+    const store = PropertiesService.getScriptProperties();
+    const timeNow = new Date().toLocaleString("vi-VN");
+    Logger.log("=== 🚀 BẮT ĐẦU CHU KỲ QUÉT [" + timeNow + "] ===");
+
+    // BƯỚC 1: Quét hội thoại Sapo Mobile TRƯỚC để nạp khách mới vào Sheet
+    try {
+      scanMobileTaggedConversations_();
+    } catch (eScan) {
+      Logger.log("❌ Lỗi quét Sapo Mobile: " + eScan.message);
     }
-  } catch (eVP) {
-    Logger.log("❌ Lỗi VPBank: " + eVP.message);
-  }
 
-  Logger.log("=== ✅ HOÀN THÀNH CHU KỲ QUÉT ===");
+    // BƯỚC 2: Quét biến động VPBank -> Tự tạo đơn Sapo (1 lần duy nhất) + Bắn Zalo
+    try {
+      const vpbankEntries = fetchVPBankEntries_();
+      if (vpbankEntries && vpbankEntries.length > 0) {
+        Logger.log("🏦 VPBank: Đọc được " + vpbankEntries.length + " giao dịch gần nhất.");
+        processSource_(vpbankEntries, store, "VPBANK");
+      } else {
+        Logger.log("🏦 VPBank: Không có giao dịch mới.");
+      }
+    } catch (eVP) {
+      Logger.log("❌ Lỗi VPBank: " + eVP.message);
+    }
+
+    Logger.log("=== ✅ HOÀN THÀNH CHU KỲ QUÉT ===");
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ============================================
