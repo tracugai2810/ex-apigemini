@@ -257,8 +257,8 @@ const bgAiService = {
       glmApiKey: '',
       glmModel: 'glm-4.7-flash',
       queProvider: 'gemini',
-      aiTemperature: 0.3,
-      aiTopP: 0.85
+      aiTemperature: '',
+      aiTopP: ''
     });
 
     // Fallback thông minh: nếu chưa có customAiBaseUrl mà có glmApiKey cũ -> tự động dùng Z.AI
@@ -289,6 +289,8 @@ const bgAiService = {
 
     const rwTemp = (data.rewriteTemperature !== '' && data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && !isNaN(parseFloat(data.rewriteTemperature))) ? parseFloat(data.rewriteTemperature) : null;
     const rwTopP = (data.rewriteTopP !== '' && data.rewriteTopP !== undefined && data.rewriteTopP !== null && !isNaN(parseFloat(data.rewriteTopP))) ? parseFloat(data.rewriteTopP) : null;
+    const aiTemp = (data.aiTemperature !== '' && data.aiTemperature !== undefined && data.aiTemperature !== null && !isNaN(parseFloat(data.aiTemperature))) ? parseFloat(data.aiTemperature) : null;
+    const aiTopP = (data.aiTopP !== '' && data.aiTopP !== undefined && data.aiTopP !== null && !isNaN(parseFloat(data.aiTopP))) ? parseFloat(data.aiTopP) : null;
 
     return {
       apiKey: (data.geminiApiKey || '').trim(),
@@ -305,8 +307,8 @@ const bgAiService = {
       customAiApiKey: customKey,
       customAiModel: customMod,
       queProvider: data.queProvider || 'gemini',
-      aiTemperature: (typeof data.aiTemperature === 'number' && !isNaN(data.aiTemperature)) ? data.aiTemperature : 0.3,
-      aiTopP: (typeof data.aiTopP === 'number' && !isNaN(data.aiTopP)) ? data.aiTopP : 0.85
+      aiTemperature: aiTemp,
+      aiTopP: aiTopP
     };
   },
 
@@ -415,7 +417,7 @@ const bgAiService = {
   },
 
   // === GỌI API OPENAI-COMPATIBLE (GLM, OpenRouter, DeepSeek, v.v.) ===
-  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '', temperature = 0.3, topP = 0.85) {
+  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '', temperature = null, topP = null) {
     if (!apiKey) throw new Error("Chưa cấu hình API Key cho provider này");
     if (!modelName) throw new Error("Chưa cấu hình tên Model");
 
@@ -574,12 +576,18 @@ const bgAiService = {
         sendStatus(`Đang gọi AI (${usedModelName})...`);
         const payload = {
           systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: userPrompt }] }],
-          generationConfig: {
-            temperature: (typeof settings.aiTemperature === 'number' && !isNaN(settings.aiTemperature)) ? settings.aiTemperature : 0.3,
-            topP: (typeof settings.aiTopP === 'number' && !isNaN(settings.aiTopP)) ? settings.aiTopP : 0.85
-          }
+          contents: [{ parts: [{ text: userPrompt }] }]
         };
+        const genConfig = {};
+        if (settings.aiTemperature !== null && typeof settings.aiTemperature === 'number' && !isNaN(settings.aiTemperature)) {
+          genConfig.temperature = settings.aiTemperature;
+        }
+        if (settings.aiTopP !== null && typeof settings.aiTopP === 'number' && !isNaN(settings.aiTopP)) {
+          genConfig.topP = settings.aiTopP;
+        }
+        if (Object.keys(genConfig).length > 0) {
+          payload.generationConfig = genConfig;
+        }
         const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 120000, (msg) => sendStatus(msg));
         usedModelName = modelName;
         aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();

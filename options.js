@@ -37,8 +37,8 @@ const DEFAULTS = {
   ],
   customAiSelectedProfileId: 'prof_zai_glm',
   queProvider:     'gemini',
-  aiTemperature:   0.3,
-  aiTopP:          0.85,
+  aiTemperature:   '',
+  aiTopP:          '',
   rewriteGeminiApiKey: '',
   rewriteGeminiModel: 'gemini-3.5-flash-lite',
   rewriteTemperature: '',
@@ -534,6 +534,8 @@ function loadSettings() {
     if (els.rewriteGeminiApiKey) els.rewriteGeminiApiKey.value = data.rewriteGeminiApiKey || '';
     if (els.rewriteTemperature) els.rewriteTemperature.value = (data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && data.rewriteTemperature !== '') ? data.rewriteTemperature : '';
     if (els.rewriteTopP) els.rewriteTopP.value = (data.rewriteTopP !== undefined && data.rewriteTopP !== null && data.rewriteTopP !== '') ? data.rewriteTopP : '';
+    if (els.aiTemperature) els.aiTemperature.value = (data.aiTemperature !== undefined && data.aiTemperature !== null && data.aiTemperature !== '') ? data.aiTemperature : '';
+    if (els.aiTopP) els.aiTopP.value = (data.aiTopP !== undefined && data.aiTopP !== null && data.aiTopP !== '') ? data.aiTopP : '';
 
     // === Model Phụ: Nạp danh sách Profiles (Bộ URL + Key + Model) ===
     let profiles = data.customAiProfiles;
@@ -611,11 +613,12 @@ function saveSettings() {
   }
   renderProfileSelect(currentProfiles, activeProfileId);
 
-  let tempVal = parseFloat(els.aiTemperature ? els.aiTemperature.value : '');
-  if (isNaN(tempVal) || tempVal < 0 || tempVal > 2) tempVal = DEFAULTS.aiTemperature;
-
-  let topPVal = parseFloat(els.aiTopP ? els.aiTopP.value : '');
-  if (isNaN(topPVal) || topPVal < 0 || topPVal > 1) topPVal = DEFAULTS.aiTopP;
+  const aiTempStr = (els.aiTemperature ? els.aiTemperature.value : '').trim();
+  const aiTopPStr = (els.aiTopP ? els.aiTopP.value : '').trim();
+  let tempVal = aiTempStr !== '' ? parseFloat(aiTempStr) : '';
+  let topPVal = aiTopPStr !== '' ? parseFloat(aiTopPStr) : '';
+  if (tempVal !== '' && (isNaN(tempVal) || tempVal < 0 || tempVal > 2)) tempVal = '';
+  if (topPVal !== '' && (isNaN(topPVal) || topPVal < 0 || topPVal > 1)) topPVal = '';
 
   const selectedRewriteModel = els.rewriteGeminiModel ? els.rewriteGeminiModel.value : 'gemini-3.5-flash-lite';
   const rwApiKey = (els.rewriteGeminiApiKey ? els.rewriteGeminiApiKey.value : '').trim();

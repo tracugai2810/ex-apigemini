@@ -255,13 +255,13 @@ try {
         try {
           const data = await new Promise(r => {
             if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
-              chrome.storage.sync.get({ geminiApiKey: "", geminiModel: "gemini-3.7-flash", aiTemperature: 0.3, aiTopP: 0.85 }, r);
-            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.7-flash", aiTemperature: 0.3, aiTopP: 0.85 }); }
+              chrome.storage.sync.get({ geminiApiKey: "", geminiModel: "gemini-3.7-flash", aiTemperature: "", aiTopP: "" }, r);
+            } else { r({ geminiApiKey: "", geminiModel: "gemini-3.7-flash", aiTemperature: "", aiTopP: "" }); }
           });
           this.apiKey = (data.geminiApiKey || "").trim();
           this.model = data.geminiModel || "gemini-3.7-flash";
-          this.temperature = (typeof data.aiTemperature === 'number' && !isNaN(data.aiTemperature)) ? data.aiTemperature : 0.3;
-          this.topP = (typeof data.aiTopP === 'number' && !isNaN(data.aiTopP)) ? data.aiTopP : 0.85;
+          this.temperature = (data.aiTemperature !== "" && data.aiTemperature !== undefined && data.aiTemperature !== null && !isNaN(parseFloat(data.aiTemperature))) ? parseFloat(data.aiTemperature) : null;
+          this.topP = (data.aiTopP !== "" && data.aiTopP !== undefined && data.aiTopP !== null && !isNaN(parseFloat(data.aiTopP))) ? parseFloat(data.aiTopP) : null;
         } catch(e) { this.apiKey = ""; }
       },
 
@@ -336,12 +336,12 @@ try {
         const payload = {
           contents: [{
             parts: [ { text: promptText } ]
-          }],
-          generationConfig: {
-            temperature: this.temperature ?? 0.3,
-            topP: this.topP ?? 0.85
-          }
+          }]
         };
+        const genConfig = {};
+        if (this.temperature !== null && typeof this.temperature === 'number' && !isNaN(this.temperature)) genConfig.temperature = this.temperature;
+        if (this.topP !== null && typeof this.topP === 'number' && !isNaN(this.topP)) genConfig.topP = this.topP;
+        if (Object.keys(genConfig).length > 0) payload.generationConfig = genConfig;
         const json = await this.executeWithFallback(payload, "TextGen", 60000); // Tăng lên 60s để AI đủ thời gian nhai file kiến thức lớn
         return (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
       },
@@ -355,19 +355,19 @@ try {
         const historyContext = await this.conversationHistory.buildContext(conversationId);
 
         // Yêu cầu AI tóm tắt cuối bài để lưu cho lần sau (nhấn mạnh KHÔNG rút ngắn bài luận)
-        const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
+        const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần sau)';
 
         const fullPrompt = promptText + historyContext + summaryInstruction;
 
         const payload = {
           contents: [{
             parts: [{ text: fullPrompt }]
-          }],
-          generationConfig: {
-            temperature: this.temperature ?? 0.3,
-            topP: this.topP ?? 0.85
-          }
+          }]
         };
+        const genConfig = {};
+        if (this.temperature !== null && typeof this.temperature === 'number' && !isNaN(this.temperature)) genConfig.temperature = this.temperature;
+        if (this.topP !== null && typeof this.topP === 'number' && !isNaN(this.topP)) genConfig.topP = this.topP;
+        if (Object.keys(genConfig).length > 0) payload.generationConfig = genConfig;
         const json = await this.executeWithFallback(payload, "TextGen", 60000);
         let result = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 
