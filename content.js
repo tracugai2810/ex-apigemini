@@ -65,7 +65,8 @@ try {
       textKeys: new Set(), // Track theo nội dung text — tránh re-create khi Sapo re-render
       myToken: "",         // Token xác thực Sapo (bắt từ inject.js)
       pageMap: new Map(),  // Map<conversationId, {pageId, fbPageId}> — lưu per-conversation, tránh ghi đè loạn
-      activePorts: new Map() // Map<serial, {port, timer}> — giữ nhịp tim Port với Background
+      activePorts: new Map(), // Map<serial, {port, timer}> — giữ nhịp tim Port với Background
+      contextMetaCache: new Map() // Map<convId, {hasContext, updatedAt, fetchedAt}> — cache giờ Sheet 60s
     },
 
     // 2b. LƯU / ĐỌC SERI TỪ STORAGE (Persistent, per-image — không chia sẻ giữa các ảnh khác nhau)
@@ -431,6 +432,49 @@ try {
         return urlParams.get('conversationId') || urlParams.get('conversation_id') || "default";
       },
 
+      getSapoToken() {
+        return SapoAuto_v1.STATE.myToken || sessionStorage.getItem('sapo_token') || "";
+      },
+
+      getTenant() {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get('tenant') || SapoAuto_v1.CONFIG.API.DEFAULT_TENANT;
+      },
+
+      formatShortTime(str) {
+        if (!str) return "";
+        const s = String(str).trim();
+        const timeMatch = s.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+        const dateMatch = s.match(/(\d{1,2}\/\d{1,2})(?:\/\d{2,4})?/);
+        if (dateMatch && timeMatch) return `${dateMatch[1]} ${timeMatch[1]}`;
+        if (dateMatch) return dateMatch[1];
+        if (timeMatch) return timeMatch[1];
+        return s.slice(0, 14);
+      },
+
+      async getContextMeta(convId, force = false) {
+        const self = SapoAuto_v1;
+        if (!convId || convId === 'default') return { hasContext: false, updatedAt: '' };
+        const cached = self.STATE.contextMetaCache.get(convId);
+        if (!force && cached && (Date.now() - cached.fetchedAt < 60000)) {
+          return cached;
+        }
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+            const res = await new Promise(resolve => {
+              chrome.runtime.sendMessage({ action: 'getContextMeta', convId }, (resp) => {
+                if (chrome.runtime.lastError) resolve({ success: false, hasContext: false, updatedAt: '' });
+                else resolve(resp || { success: false, hasContext: false, updatedAt: '' });
+              });
+            });
+            const meta = { hasContext: !!res.hasContext, updatedAt: res.updatedAt || '', fetchedAt: Date.now() };
+            if (res.success !== false) self.STATE.contextMetaCache.set(convId, meta);
+            return meta;
+          }
+        } catch(e) {}
+        return cached || { hasContext: false, updatedAt: '' };
+      },
+
       startKeepAlivePort(serial) {
         const self = SapoAuto_v1;
         try {
@@ -687,7 +731,13 @@ try {
         const imgKey = "sa_img_" + serial;
         if (typeof chrome !== "undefined" && chrome?.storage?.local) {
           chrome.storage.local.get([imgKey], (res) => {
-            const imageData = res?.[imgKey];
+            const rawImg = res?.[imgKey];
+            if (!rawImg) return;
+            if (typeof rawImg === 'object' && rawImg.savedAt && (Date.now() - rawImg.savedAt > 86400000)) {
+              chrome.storage.local.remove([imgKey]);
+              return;
+            }
+            const imageData = (typeof rawImg === 'string') ? rawImg : rawImg.data;
             if (!imageData) return;
             
             btn.textContent = "OK";
@@ -732,8 +782,13 @@ try {
             try {
               const saved = typeof savedStr === 'string' ? JSON.parse(savedStr) : savedStr;
               if (!saved || !saved.content) return;
+              if (saved.savedAt && (Date.now() - saved.savedAt > 86400000)) {
+                chrome.storage.local.remove([specificKey]);
+                return;
+              }
               btn.textContent = "Copy";
               btn.disabled = false;
+              btn.classList.remove("sa-ctx-locked");
               btn.style.opacity = "1";
               if (saved.type === 'business') {
                  btn.style.background = "linear-gradient(135deg, #0084ff, #00c6ff)";
@@ -800,8 +855,9 @@ try {
                    }
                    // Bấm Copy xong là XÓA NGAY LẬP TỨC KHỎI KHO EXTENSION
                    chrome.storage.local.remove([specificKey]);
-                   // Đồng bộ lại trạng thái nếu nút còn lại đang chạy ngầm
+                   // Đồng bộ lại trạng thái nếu nút còn lại đang chạy ngầm + trạng thái mở khóa ngữ cảnh
                    SapoAuto_v1.ui.applyRunningState(btn, serial, btnType);
+                   SapoAuto_v1.ui.syncContextUi(serial, SapoAuto_v1.utils.getActiveConversationId());
                  } catch (err) {
                    SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
                  }
@@ -832,12 +888,166 @@ try {
                 if (btn.textContent !== "⌛...") {
                   btn.disabled = false;
                   btn.style.opacity = "1";
-                  btn.removeAttribute("title");
+                  if (!btn.classList.contains("sa-ctx-locked")) {
+                    btn.removeAttribute("title");
+                  }
                 }
               }
             });
           }
         } catch(e) {}
+      },
+
+      createContextButton(serial, convId, btnClass, stopAllFn) {
+        const self = SapoAuto_v1;
+        const btn = document.createElement("button");
+        btn.className = `${btnClass} btn-ctx`;
+        btn.dataset.serial = serial;
+        btn.dataset.convId = convId;
+        btn.textContent = "📋 HS...";
+        if (stopAllFn) {
+          btn.onmousedown = stopAllFn;
+          btn.onmouseup = stopAllFn;
+        } else {
+          btn.onmousedown = (e) => e.stopPropagation();
+          btn.onmouseup = (e) => e.stopPropagation();
+        }
+        btn.onclick = (e) => {
+          e.stopPropagation(); e.preventDefault();
+          self.textScan.runContextBuild(serial, convId);
+        };
+        return btn;
+      },
+
+      syncContextUi(serial, convId) {
+        const self = SapoAuto_v1;
+        const activeConvId = convId || self.utils.getActiveConversationId();
+        if (!serial || !activeConvId) return;
+
+        const runKey = `sa_ctx_running_${activeConvId}_${serial}`;
+        const ctxKey = `sa_ctx_${activeConvId}_${serial}`;
+        const unlockKey = `sa_unlock_${activeConvId}_${serial}`;
+
+        const ctxBtns = Array.from(document.querySelectorAll(`.btn-ctx[data-serial="${serial}"]`))
+          .filter(b => !b.dataset.convId || b.dataset.convId === activeConvId);
+        const aiBtns = Array.from(document.querySelectorAll(
+          `.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"], .btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`
+        ));
+
+        if (typeof chrome === "undefined" || !chrome?.storage?.local) return;
+
+        chrome.storage.local.get([runKey, ctxKey, unlockKey], (res) => {
+          const now = Date.now();
+          const run = res?.[runKey];
+          const ctxData = res?.[ctxKey];
+          const unlock = res?.[unlockKey];
+
+          const isRunning = !!(run && run.startTime && (now - run.startTime < 180000));
+          if (run && !isRunning) chrome.storage.local.remove(runKey);
+
+          const isUnlocked = !!(unlock && unlock.unlockedAt && (now - unlock.unlockedAt <= 86400000));
+          if (unlock && !isUnlocked) chrome.storage.local.remove(unlockKey);
+
+          const hasValidCtx = !!(ctxData && (!ctxData.savedAt || now - ctxData.savedAt <= 86400000));
+          if (ctxData && !hasValidCtx) chrome.storage.local.remove(ctxKey);
+
+          // 1. Cập nhật khóa/mở khóa cho 2 nút Gemini & Khác (nếu đang là nút Copy kết quả cũ thì không khóa)
+          aiBtns.forEach(b => {
+            if (!isUnlocked && b.textContent !== "Copy") {
+              b.classList.add("sa-ctx-locked");
+              b.title = "🔒 Bấm nút 📋 lấy Hồ sơ ngữ cảnh trước khi luận!";
+            } else {
+              b.classList.remove("sa-ctx-locked");
+              if (b.title && b.title.startsWith("🔒")) {
+                b.removeAttribute("title");
+              }
+            }
+          });
+
+          // 2. Cập nhật giao diện & onclick cho nút 📋
+          ctxBtns.forEach(ctxBtn => {
+            ctxBtn.classList.remove("sa-ctx-ready", "sa-ctx-warn", "sa-ctx-new", "sa-ctx-running");
+            ctxBtn.style.background = "";
+            ctxBtn.style.color = "";
+            ctxBtn.style.boxShadow = "";
+
+            if (isRunning) {
+              ctxBtn.textContent = "⏳ HS...";
+              ctxBtn.disabled = true;
+              ctxBtn.classList.add("sa-ctx-running");
+              ctxBtn.title = "Đang tải tin nhắn & tổng hợp hồ sơ ngữ cảnh...";
+              return;
+            }
+
+            ctxBtn.disabled = false;
+
+            if (hasValidCtx && (ctxData.type === 'ok' || ctxData.type === 'fallback') && ctxData.content) {
+              const shortT = self.utils.formatShortTime(ctxData.time);
+              const isFallback = ctxData.type === 'fallback';
+              ctxBtn.textContent = (isFallback ? "⚠️ Copy HS cũ" : "📋 Copy HS") + (shortT ? ` (${shortT})` : "");
+              ctxBtn.classList.add(isFallback ? "sa-ctx-warn" : "sa-ctx-ready");
+              ctxBtn.title = isFallback
+                ? `Tạo mới lỗi (${ctxData.error || 'API'}) -> Bấm copy bản cũ trên Sheet`
+                : "Bấm để Copy Hồ sơ ngữ cảnh (dán vào Gemini web). Gemini/Khác đã mở khóa!";
+              ctxBtn.onclick = async (e) => {
+                e.stopPropagation(); e.preventDefault();
+                try {
+                  await navigator.clipboard.writeText(ctxData.content);
+                  self.utils.toast(isFallback ? "⚠️ Đã copy Hồ sơ cũ từ Sheet!" : "📋 Đã copy Hồ sơ ngữ cảnh!", "success");
+                  chrome.storage.local.remove([ctxKey], () => {
+                    self.ui.syncContextUi(serial, activeConvId);
+                  });
+                } catch (err) {
+                  self.utils.toast("❌ Lỗi copy hồ sơ: " + err.message, "error");
+                }
+              };
+              return;
+            }
+
+            if (hasValidCtx && ctxData.type === 'new_customer') {
+              ctxBtn.textContent = "✅ Khách mới";
+              ctxBtn.classList.add("sa-ctx-new");
+              ctxBtn.title = "Khách mới chưa có lịch sử luận trước đó. Bấm lại để quét lại nếu cần.";
+              ctxBtn.onclick = (e) => {
+                e.stopPropagation(); e.preventDefault();
+                self.textScan.runContextBuild(serial, activeConvId);
+              };
+              return;
+            }
+
+            if (hasValidCtx && ctxData.type === 'error_no_old') {
+              ctxBtn.textContent = "⚠️ Lỗi HS";
+              ctxBtn.classList.add("sa-ctx-warn");
+              ctxBtn.title = `Lỗi lấy HS (${ctxData.error || 'mạng'}) và Sheet chưa có bản cũ. Bấm để thử lại.`;
+              ctxBtn.onclick = (e) => {
+                e.stopPropagation(); e.preventDefault();
+                self.textScan.runContextBuild(serial, activeConvId);
+              };
+              return;
+            }
+
+            // Chưa chạy trên máy này (hoặc đã bấm Copy xong): hiển thị giờ cập nhật từ Google Sheet
+            ctxBtn.textContent = "📋 HS...";
+            ctxBtn.onclick = (e) => {
+              e.stopPropagation(); e.preventDefault();
+              self.textScan.runContextBuild(serial, activeConvId);
+            };
+            self.utils.getContextMeta(activeConvId).then((meta) => {
+              // Đảm bảo nút không bị chuyển sang trạng thái khác trong lúc chờ
+              if (ctxBtn.classList.contains("sa-ctx-running") || ctxBtn.classList.contains("sa-ctx-ready") || ctxBtn.classList.contains("sa-ctx-warn") || ctxBtn.classList.contains("sa-ctx-new")) {
+                return;
+              }
+              if (meta && meta.hasContext && meta.updatedAt) {
+                const shortT = self.utils.formatShortTime(meta.updatedAt);
+                ctxBtn.textContent = "📋 " + (shortT || "Hồ sơ");
+                ctxBtn.title = `Hồ sơ trên Google Sheet cập nhật lúc: ${meta.updatedAt}. Bấm để lấy hồ sơ mới nhất!`;
+              } else {
+                ctxBtn.textContent = "📋 Chưa có";
+                ctxBtn.title = "Chưa có hồ sơ trên Google Sheet. Bấm để quét tin nhắn & tạo hồ sơ!";
+              }
+            });
+          });
+        });
       },
 
       isTarget(img) {
@@ -1054,15 +1264,17 @@ try {
           const qKey = "sa_question_serial_" + val;
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.get([qKey], (res) => {
-              if (res?.[qKey] && !questionInput.value) {
-                questionInput.value = res[qKey];
+              const qRaw = res?.[qKey];
+              const qText = (typeof qRaw === 'string') ? qRaw : (qRaw?.text || '');
+              if (qText && !questionInput.value) {
+                questionInput.value = qText;
               }
             });
           }
           questionInput.oninput = (e) => {
             const textVal = e.target.value;
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-              chrome.storage.local.set({ [qKey]: textVal });
+              chrome.storage.local.set({ [qKey]: { text: textVal, savedAt: Date.now() } });
             }
           };
           questionInput.onclick = stopAll;
@@ -1070,6 +1282,10 @@ try {
           questionInput.onmouseup = stopAll;
           questionInput.onkeydown = stopAll;
           actionGroup.appendChild(questionInput);
+
+          const activeConvId = self.utils.getActiveConversationId();
+          const btnCtx = self.ui.createContextButton(val, activeConvId, "sa-mini-btn", stopAll);
+          actionGroup.appendChild(btnCtx);
 
           const btnC = document.createElement("button");
           btnC.className = "sa-mini-btn btn-c";
@@ -1090,9 +1306,11 @@ try {
             stopAll(e);
             const cId = self.utils.getActiveConversationId();
             await self.aiService.conversationHistory.clear(cId);
+            self.STATE.contextMetaCache.delete(cId);
             self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
             btnResetHist.style.opacity = "0.3";
             setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
+            self.ui.syncContextUi(val, cId);
           };
           btnResetHist.onmousedown = stopAll; btnResetHist.onmouseup = stopAll;
           actionGroup.appendChild(btnResetHist);
@@ -1106,6 +1324,8 @@ try {
           self.ui.applySavedState(btnTxtOnly, val, "Khác", btnTxtOnly.onclick, 'chu');
           self.ui.applyRunningState(btnTxtOnly, val, 'chu');
           actionGroup.appendChild(btnTxtOnly);
+
+          self.ui.syncContextUi(val, activeConvId);
 
           const btnX = document.createElement("button");
           btnX.className = "sa-mini-btn btn-x";
@@ -1222,20 +1442,26 @@ try {
         const qKey = "sa_question_serial_" + numOnly;
         if (typeof chrome !== "undefined" && chrome?.storage?.local) {
           chrome.storage.local.get([qKey], (res) => {
-            if (res?.[qKey] && !questionInput.value) {
-              questionInput.value = res[qKey];
+            const qRaw = res?.[qKey];
+            const qText = (typeof qRaw === 'string') ? qRaw : (qRaw?.text || '');
+            if (qText && !questionInput.value) {
+              questionInput.value = qText;
             }
           });
         }
         questionInput.oninput = (e) => {
           const textVal = e.target.value;
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-            chrome.storage.local.set({ [qKey]: textVal });
+            chrome.storage.local.set({ [qKey]: { text: textVal, savedAt: Date.now() } });
           }
         };
         questionInput.onclick = (e) => e.stopPropagation();
         questionInput.onmousedown = (e) => e.stopPropagation();
         questionInput.onkeydown = (e) => e.stopPropagation();
+
+        const activeConvId = self.utils.getActiveConversationId();
+        const btnCtx = self.ui.createContextButton(numOnly, activeConvId, "sa-text-btn");
+        badge.appendChild(btnCtx);
 
         const btnTxt = document.createElement("button");
         btnTxt.className = "sa-text-btn btn-txt";
@@ -1254,9 +1480,11 @@ try {
         btnResetHist.onclick = async () => {
           const cId = self.utils.getActiveConversationId();
           await self.aiService.conversationHistory.clear(cId);
+          self.STATE.contextMetaCache.delete(cId);
           self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
           btnResetHist.style.opacity = "0.3";
           setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
+          self.ui.syncContextUi(numOnly, cId);
         };
         btnResetHist.onmousedown = (e) => e.stopPropagation();
         btnResetHist.onmouseup = (e) => e.stopPropagation();
@@ -1275,6 +1503,7 @@ try {
 
         container.appendChild(badge);
         container.appendChild(questionInput);
+        self.ui.syncContextUi(numOnly, activeConvId);
       }
     },
 
@@ -1419,7 +1648,7 @@ try {
             const imageData = e.data.payload;
             const imgKey = "sa_img_" + serial;
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-              chrome.storage.local.set({ [imgKey]: imageData });
+              chrome.storage.local.set({ [imgKey]: { data: imageData, savedAt: Date.now() } });
             }
             const originalOnclick = btn.onclick;
             btn.textContent = "OK";
@@ -1471,9 +1700,69 @@ try {
         }, 40000);
       },
 
+      async runContextBuild(serial, convIdParam = null) {
+        const self = SapoAuto_v1;
+        const convId = convIdParam || self.utils.getActiveConversationId();
+        if (!convId || convId === 'default') {
+          self.utils.toast("❌ Chưa xác định được hội thoại khách hàng!", "error");
+          return;
+        }
+        const runKey = `sa_ctx_running_${convId}_${serial}`;
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          const checkRun = await new Promise(resolve => {
+            chrome.storage.local.get([runKey], res => resolve(res?.[runKey]));
+          });
+          if (checkRun && checkRun.startTime && (Date.now() - checkRun.startTime < 180000)) {
+            self.utils.toast(`⏳ [${serial}] Đang tổng hợp hồ sơ, vui lòng đợi...`, "warning");
+            return;
+          }
+          await new Promise(resolve => {
+            chrome.storage.local.set({
+              [runKey]: { startTime: Date.now(), convId, serial }
+            }, resolve);
+          });
+        }
+
+        const capturedCustomerName = self.aiService.conversationHistory._getCustomerName();
+        const sapoToken = self.utils.getSapoToken();
+        const tenant = self.utils.getTenant();
+
+        self.ui.syncContextUi(serial, convId);
+        self.utils.toast(`📋 [${capturedCustomerName || serial}] Đang tải tin nhắn & lập hồ sơ...`, "info");
+        self.utils.startKeepAlivePort('ctx_' + serial);
+
+        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({
+            action: 'startContextBuild',
+            serial,
+            convId,
+            customerName: capturedCustomerName,
+            sapoToken,
+            tenant
+          });
+        }
+      },
+
       async runPopup(serial, btn, date, question = "", inputEl = null, triggerSource = 'luan', tz = "+07:00") {
         const self = SapoAuto_v1;
         const originalText = (triggerSource === 'chu') ? "Khác" : "Gemini";
+        const convId = self.utils.getActiveConversationId();
+
+        // 0. Kiểm tra đã chạy nút 📋 Ngữ cảnh cho seri này trên máy này chưa
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          const unlockKey = `sa_unlock_${convId}_${serial}`;
+          const lockCheck = await new Promise(resolve => {
+            chrome.storage.local.get([unlockKey], res => resolve(res?.[unlockKey]));
+          });
+          if (!lockCheck || !lockCheck.unlockedAt || (Date.now() - lockCheck.unlockedAt > 86400000)) {
+            self.utils.toast("🔒 Hãy bấm nút 📋 lấy Hồ sơ ngữ cảnh trước khi luận!", "warning", 3500);
+            document.querySelectorAll(`.btn-ctx[data-serial="${serial}"]`).forEach(el => {
+              el.classList.add('sa-ctx-pulse');
+              setTimeout(() => el.classList.remove('sa-ctx-pulse'), 1500);
+            });
+            return;
+          }
+        }
 
         // 1. Kiểm tra chống xung đột (Mutex Lock): Nếu quẻ này đang chạy, không cho kích hoạt tiếp
         if (typeof chrome !== "undefined" && chrome?.storage?.local) {
@@ -1511,7 +1800,6 @@ try {
           chrome.storage.local.set({ ['sa_running_' + serial]: runInfo });
         }
 
-        const convId = self.utils.getActiveConversationId();
         const dateObj = date ? { year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate(), hour: date.getHours(), min: date.getMinutes() } : null;
         const currentModel = (triggerSource === 'chu') ? "Model Phụ" : (self.aiService.model || "Gemini");
 
@@ -1655,6 +1943,40 @@ try {
                         b.removeAttribute("title");
                       }
                     });
+                    self.ui.syncContextUi(serial, self.utils.getActiveConversationId());
+                  }
+                } else if (k.startsWith("sa_ctx_running_")) {
+                  const run = allData[k];
+                  if (!run || !run.startTime || Date.now() - run.startTime > 180000) {
+                    chrome.storage.local.remove(k);
+                    if (run && run.serial) {
+                      self.utils.stopKeepAlivePort('ctx_' + run.serial);
+                      self.ui.syncContextUi(run.serial, run.convId || self.utils.getActiveConversationId());
+                    }
+                  }
+                } else if (k.startsWith("sa_ctx_")) {
+                  const item = allData[k];
+                  if (!item || !item.savedAt || Date.now() - item.savedAt > 86400000) {
+                    chrome.storage.local.remove(k);
+                  }
+                } else if (k.startsWith("sa_unlock_")) {
+                  const item = allData[k];
+                  if (!item || !item.unlockedAt || Date.now() - item.unlockedAt > 86400000) {
+                    chrome.storage.local.remove(k);
+                  }
+                } else if (k.startsWith("sa_res_")) {
+                  try {
+                    const obj = (typeof allData[k] === 'string') ? JSON.parse(allData[k]) : allData[k];
+                    if (obj && obj.savedAt && Date.now() - obj.savedAt > 86400000) {
+                      chrome.storage.local.remove(k);
+                    }
+                  } catch {
+                    chrome.storage.local.remove(k);
+                  }
+                } else if (k.startsWith("sa_img_")) {
+                  const imgVal = allData[k];
+                  if (imgVal && typeof imgVal === 'object' && imgVal.savedAt && Date.now() - imgVal.savedAt > 86400000) {
+                    chrome.storage.local.remove(k);
                   }
                 }
               });
@@ -1666,7 +1988,28 @@ try {
       // === LẮNG NGHE KẾT QUẢ AI TỪ BACKGROUND SERVICE WORKER ===
       if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
         chrome.runtime.onMessage.addListener((msg) => {
-          if (msg.action === 'AI_QUE_STATUS') {
+          if (msg.action === 'CTX_STATUS') {
+            const { customerName, message } = msg;
+            self.utils.toast(`📋 [${customerName || 'Hồ sơ'}] ${message}`, "info");
+          } else if (msg.action === 'CTX_DONE') {
+            const { serial, convId, status, time, error, customerName, rawCount, filteredCount, sheetSaved } = msg;
+            self.utils.stopKeepAlivePort('ctx_' + serial);
+            if (status === 'ok') {
+              self.STATE.contextMetaCache.set(convId, { hasContext: true, updatedAt: time || '', fetchedAt: Date.now() });
+              self.utils.toast(
+                `✅ [${customerName || serial}] Xong Hồ sơ (${filteredCount || 0}/${rawCount || 0} tin)${sheetSaved === false ? ' ⚠️ Lỗi lưu Sheet' : ''}! Đã mở khóa Gemini/Khác.`,
+                "success",
+                5000
+              );
+            } else if (status === 'new_customer') {
+              self.utils.toast(`✅ [${customerName || serial}] Khách mới! Đã mở khóa Gemini/Khác.`, "success", 4000);
+            } else if (status === 'fallback') {
+              self.utils.toast(`⚠️ [${customerName || serial}] Tạo HS lỗi (${error || 'API'}), đã lấy HS cũ từ Sheet & mở khóa Gemini/Khác.`, "warning", 5000);
+            } else {
+              self.utils.toast(`⚠️ [${customerName || serial}] Lỗi lấy HS (${error || 'mạng'}), chưa có HS cũ — đã mở khóa Gemini/Khác.`, "warning", 5000);
+            }
+            self.ui.syncContextUi(serial, convId);
+          } else if (msg.action === 'AI_QUE_STATUS') {
             const { customerName, message } = msg;
             self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
           } else if (msg.action === 'AI_QUE_COMPLETED') {
@@ -1712,6 +2055,7 @@ try {
             } else {
               self.utils.toast(`⚠️ [${customerName || serial}] AI quá tải/lỗi! Đã lấy quẻ thô, bấm nút cam để mở Gemini web.`, "warning", 5000);
             }
+            self.ui.syncContextUi(serial, self.utils.getActiveConversationId());
           } else if (msg.action === 'AI_QUE_FAILED') {
             const { serial, error, customerName, triggerSource = 'luan' } = msg;
             self.utils.stopKeepAlivePort(serial);
@@ -1752,6 +2096,7 @@ try {
             });
 
             self.utils.toast(`❌ [${customerName || serial}] Lỗi luận quẻ: ${error}`, "error", 5000);
+            self.ui.syncContextUi(serial, self.utils.getActiveConversationId());
           }
         });
       }

@@ -1,9 +1,10 @@
 /**
- * GOOGLE APPS SCRIPT: ĐỒNG BỘ NGỮ CẢNH EXTENSION (v2.0)
+ * GOOGLE APPS SCRIPT: ĐỒNG BỘ NGỮ CẢNH EXTENSION (v3.0 - Hỗ trợ POST Hồ sơ dài)
  * ---------------------------------------------------
  * - SO KHỚP DUY NHẤT THEO convId (CỘT A).
  * - TUYỆT ĐỐI KHÔNG SO KHỚP THEO TÊN KHÁCH (Tránh ghi đè khi trùng tên).
- * - TỰ ĐỘNG LƯU TỐI ĐA 3 QUẺ GẦN NHẤT CHO MỖI CUỘC TRÒ CHUYỆN.
+ * - doGet: Đọc (action=get), Lưu ngắn (action=save), Xóa (action=delete).
+ * - doPost: Lưu đè Hồ sơ ngữ cảnh tổng hợp dài (action=save_profile) không giới hạn độ dài URL.
  * ---------------------------------------------------
  */
 
@@ -12,7 +13,7 @@ function doGet(e) {
     const action = e?.parameter?.action;
     const convId = String(e?.parameter?.convId || "").trim();
     if (!convId || convId === "default") {
-      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [] })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [], updatedAt: "" })).setMimeType(ContentService.MimeType.JSON);
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -25,19 +26,24 @@ function doGet(e) {
         const rowConvId = String(data[i][0] || "").trim();
         if (rowConvId === convId) {
           let summaries = [];
+          const rowTime = data[i][2] ? String(data[i][2]) : "";
           try {
             summaries = JSON.parse(data[i][1]);
-            if (!Array.isArray(summaries)) summaries = [{ text: String(data[i][1]), time: data[i][2] }];
+            if (!Array.isArray(summaries)) summaries = [{ text: String(data[i][1]), time: rowTime }];
           } catch(err) {
-            if (data[i][1]) summaries = [{ text: String(data[i][1]), time: data[i][2] }];
+            if (data[i][1]) summaries = [{ text: String(data[i][1]), time: rowTime }];
           }
-          return ContentService.createTextOutput(JSON.stringify({ success: true, data: summaries })).setMimeType(ContentService.MimeType.JSON);
+          return ContentService.createTextOutput(JSON.stringify({
+            success: true,
+            data: summaries,
+            updatedAt: rowTime
+          })).setMimeType(ContentService.MimeType.JSON);
         }
       }
-      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [] })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [], updatedAt: "" })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 2. ACTION SAVE: LƯU TÓM TẮT CHỈ THEO CỘT A (convId)
+    // 2. ACTION SAVE (GET CŨ): LƯU TÓM TẮT CHỈ THEO CỘT A (convId)
     if (action === "save") {
       let customerName = String(e?.parameter?.customerName || "").trim();
       try {
@@ -105,7 +111,7 @@ function doGet(e) {
           customerName || "Khách Hàng"
         ]);
       }
-      return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, time: nowStr })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // 3. ACTION DELETE: XÓA CHỈ THEO CỘT A (convId)
@@ -121,5 +127,67 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Invalid action" })).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// 4. ACTION POST (MỚI): LƯU ĐÈ HỒ SƠ NGỮ CẢNH TỔNG HỢP DÀI (KHÔNG GIỚI HẠN ĐỘ DÀI URL)
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: "No post data" })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    let body = {};
+    try { body = JSON.parse(e.postData.contents); } catch(err) {}
+
+    if (body.action === "save_profile" || body.action === "save") {
+      const convId = String(body.convId || "").trim();
+      const customerName = String(body.customerName || "").trim();
+      let profileText = String(body.data || body.profile || "").trim();
+
+      if (!convId || convId === "default" || !profileText) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Missing convId or data" })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      // Giới hạn an toàn 45.000 ký tự để không bao giờ vượt trần 50.000 ký tự của 1 ô Google Sheet
+      if (profileText.length > 45000) {
+        profileText = profileText.slice(-45000);
+      }
+
+      lock.waitLock(15000);
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      let sheet = ss.getSheetByName("Ngữ cảnh Extension") || ss.getSheetByName("Ngữ cảnh") || ss.getSheetByName("Context") || ss.getSheets()[0];
+      const data = sheet.getDataRange().getValues();
+      const nowStr = new Date().toLocaleString("vi-VN");
+
+      // Lưu dạng mảng 1 phần tử [{text, time}] để tương thích ngược 100% với hàm get và bản cũ
+      const finalJsonData = JSON.stringify([{ text: profileText, time: nowStr }]);
+
+      let foundRow = -1;
+      for (let i = data.length - 1; i >= 1; i--) {
+        if (String(data[i][0] || "").trim() === convId) {
+          foundRow = i + 1;
+          break;
+        }
+      }
+
+      if (foundRow > 0) {
+        sheet.getRange(foundRow, 1).setValue(convId);
+        sheet.getRange(foundRow, 2).setValue(finalJsonData);
+        sheet.getRange(foundRow, 3).setValue(nowStr);
+        if (customerName) sheet.getRange(foundRow, 4).setValue(customerName);
+      } else {
+        sheet.appendRow([convId, finalJsonData, nowStr, customerName || "Khách Hàng"]);
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({ success: true, time: nowStr })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Invalid post action" })).setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    try { lock.releaseLock(); } catch(eLock) {}
   }
 }

@@ -200,9 +200,98 @@ async function cleanupStaleSessions() {
   }
 }
 
+// === TỰ ĐỘNG DỌN DẸP RÁC LOCAL STORAGE SAU 24 GIỜ ===
+const LOCAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 giờ
+let _lastLocalCleanupAt = 0;
+
+async function cleanupExpiredLocalStorage(force = false) {
+  const now = Date.now();
+  if (!force && (now - _lastLocalCleanupAt < 15 * 60 * 1000)) return;
+  _lastLocalCleanupAt = now;
+  try {
+    const allData = await chrome.storage.local.get(null);
+    if (!allData) return;
+    const keysToRemove = [];
+    const keysToStamp = {};
+
+    for (const [k, v] of Object.entries(allData)) {
+      if (k.startsWith('sa_running_') || k.startsWith('sa_ctx_running_')) {
+        if (!v || !v.startTime || (now - v.startTime > 240000)) {
+          keysToRemove.push(k);
+        }
+        continue;
+      }
+      if (k.startsWith('sa_unlock_')) {
+        if (!v || !v.unlockedAt || (now - v.unlockedAt > LOCAL_TTL_MS)) {
+          keysToRemove.push(k);
+        }
+        continue;
+      }
+      if (k.startsWith('sa_ctx_')) {
+        if (!v || !v.savedAt || (now - v.savedAt > LOCAL_TTL_MS)) {
+          keysToRemove.push(k);
+        }
+        continue;
+      }
+      if (k.startsWith('sa_res_')) {
+        try {
+          const obj = (typeof v === 'string') ? JSON.parse(v) : v;
+          if (!obj) {
+            keysToRemove.push(k);
+          } else if (obj.savedAt) {
+            if (now - obj.savedAt > LOCAL_TTL_MS) keysToRemove.push(k);
+          } else {
+            obj.savedAt = now;
+            keysToStamp[k] = JSON.stringify(obj);
+          }
+        } catch {
+          keysToRemove.push(k);
+        }
+        continue;
+      }
+      if (k.startsWith('sa_img_')) {
+        if (!v) {
+          keysToRemove.push(k);
+        } else if (typeof v === 'string') {
+          keysToStamp[k] = { data: v, savedAt: now };
+        } else if (typeof v === 'object') {
+          if (!v.savedAt || (now - v.savedAt > LOCAL_TTL_MS)) {
+            keysToRemove.push(k);
+          }
+        }
+        continue;
+      }
+      if (k.startsWith('sa_question_serial_')) {
+        if (typeof v === 'string') {
+          if (!v.trim()) keysToRemove.push(k);
+          else keysToStamp[k] = { text: v, savedAt: now };
+        } else if (v && typeof v === 'object') {
+          if (!v.savedAt || (now - v.savedAt > LOCAL_TTL_MS)) keysToRemove.push(k);
+        }
+      }
+    }
+
+    if (keysToRemove.length > 0) {
+      await chrome.storage.local.remove(keysToRemove);
+      console.log(`[SA-BG] 🧹 Đã dọn ${keysToRemove.length} mục local quá hạn (24h).`);
+    }
+    if (Object.keys(keysToStamp).length > 0) {
+      await chrome.storage.local.set(keysToStamp);
+    }
+  } catch (e) {
+    console.warn('[SA-BG] Lỗi dọn local storage:', e);
+  }
+}
+
 // Chạy cleanup khi extension được install/reload hoặc browser khởi động
-chrome.runtime.onInstalled.addListener(() => cleanupStaleSessions());
-chrome.runtime.onStartup.addListener(() => cleanupStaleSessions());
+chrome.runtime.onInstalled.addListener(() => {
+  cleanupStaleSessions();
+  cleanupExpiredLocalStorage(true);
+});
+chrome.runtime.onStartup.addListener(() => {
+  cleanupStaleSessions();
+  cleanupExpiredLocalStorage(true);
+});
 
 // === CƠ CHẾ GIỮ NHỊP TIM NỘI BỘ TRONG BACKGROUND (CHROME MV3 KEEP-ALIVE) ===
 // Tự động gọi API nhẹ của Chrome mỗi 20s để reset bộ đếm 30s của Service Worker,
@@ -333,23 +422,87 @@ const bgAiService = {
     return null;
   },
 
-  async buildContext(syncSheetUrl, convId, customerName) {
-    if (!syncSheetUrl || !convId) return '';
-    try {
-      const result = await this.fetchSheet(syncSheetUrl, {
-        action: 'get',
-        convId: convId
-      });
-      if (result && result.success && Array.isArray(result.data) && result.data.length > 0) {
-        let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
-        result.data.forEach((s, i) => {
-          const entry = typeof s === 'string' ? s : s.text;
-          const time = (s && s.time) ? ` (${s.time})` : '';
-          ctx += `\nQuẻ trước #${i + 1}${time}: ${entry}\n`;
+  async saveSheetPost(syncSheetUrl, { convId, customerName, profileText }) {
+    if (!syncSheetUrl || !convId || !profileText) return null;
+    const payload = JSON.stringify({
+      action: 'save_profile',
+      convId,
+      customerName: customerName || '',
+      data: profileText
+    });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+        const res = await fetch(syncSheetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: payload,
+          redirect: 'follow',
+          signal: controller.signal
         });
-        return ctx;
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return data;
+      } catch (e) {
+        console.warn(`[SA-BG] Lỗi POST Google Sheet (lần ${attempt}/2):`, e.message);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
       }
-    } catch(e) {}
+    }
+    return null;
+  },
+
+  extractSheetContext(result) {
+    if (!result || !result.success || !Array.isArray(result.data) || result.data.length === 0) {
+      return { text: '', updatedAt: result?.updatedAt || '', items: [] };
+    }
+    const items = result.data.map(s => ({
+      text: (typeof s === 'string' ? s : (s?.text || '')).trim(),
+      time: (s && typeof s === 'object' && s.time) ? String(s.time) : ''
+    })).filter(x => x.text);
+    const updatedAt = result.updatedAt || (items[items.length - 1]?.time || '');
+    const text = items.length === 1
+      ? items[0].text
+      : items.map((it, i) => `Quẻ trước #${i + 1}${it.time ? ` (${it.time})` : ''}: ${it.text}`).join('\n');
+    return { text, updatedAt, items };
+  },
+
+  async buildContext(syncSheetUrl, convId, customerName, serial = '') {
+    try {
+      if (syncSheetUrl && convId) {
+        const result = await this.fetchSheet(syncSheetUrl, {
+          action: 'get',
+          convId: convId
+        });
+        const extracted = this.extractSheetContext(result);
+        if (extracted.items.length === 1) {
+          const timeTag = extracted.updatedAt ? ` (cập nhật ${extracted.updatedAt})` : '';
+          return `\n\n---\n[NGỮ CẢNH HỒ SƠ KHÁCH HÀNG & CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ${timeTag} — Hãy tham khảo kỹ hoàn cảnh, diễn biến thực tế và các kết luận/ứng kỳ đã báo để luận giải sâu sát, nhất quán, không mâu thuẫn với các lần trước]:\n${extracted.items[0].text}\n`;
+        }
+        if (extracted.items.length > 1) {
+          let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
+          extracted.items.forEach((it, i) => {
+            const time = it.time ? ` (${it.time})` : '';
+            ctx += `\nQuẻ trước #${i + 1}${time}: ${it.text}\n`;
+          });
+          return ctx;
+        }
+      }
+    } catch (e) {}
+
+    // Fallback khẩn cấp: nếu Sheet lỗi, lấy bản local của đúng convId + serial
+    if (convId && serial) {
+      try {
+        const localKey = `sa_ctx_${convId}_${serial}`;
+        const localRes = await chrome.storage.local.get([localKey]);
+        const item = localRes?.[localKey];
+        if (item && item.content && (!item.savedAt || Date.now() - item.savedAt <= LOCAL_TTL_MS)) {
+          const timeTag = item.time ? ` (cập nhật ${item.time})` : '';
+          return `\n\n---\n[NGỮ CẢNH HỒ SƠ KHÁCH HÀNG & CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ${timeTag} — Hãy tham khảo kỹ hoàn cảnh, diễn biến thực tế và các kết luận/ứng kỳ đã báo để luận giải sâu sát, nhất quán, không mâu thuẫn với các lần trước]:\n${item.content}\n`;
+        }
+      } catch (e2) {}
+    }
     return '';
   },
 
@@ -539,16 +692,14 @@ const bgAiService = {
     }
     const mdContent = this._cachedKinhDichMd || "";
 
-    // 3. Lấy ngữ cảnh cũ
-    const historyContext = await this.buildContext(settings.syncSheetUrl, conversationId, customerName);
+    // 3. Lấy ngữ cảnh hồ sơ từ Google Sheet (hoặc fallback local nếu Sheet lỗi)
+    const historyContext = await this.buildContext(settings.syncSheetUrl, conversationId, customerName, serial);
 
-    // 4. Tạo prompt — Tách riêng System (cố định, cache) và User (thay đổi mỗi quẻ)
-    const summaryInstruction = '\n\n---\n[YÊU CẦU BẮT BUỘC]: Hãy viết bài luận ĐẦY ĐỦ CHI TIẾT như bình thường, KHÔNG được rút ngắn hay lược bỏ nội dung. Sau khi viết XONG toàn bộ bài luận, hãy viết THÊM 1 đoạn tóm tắt ở cuối cùng theo đúng format sau:\n[TÓM_TẮT]: (Ghi lại: câu hỏi khách hỏi gì, tên quẻ chủ và quẻ biến, kết luận chính của quẻ, lời khuyên cốt lõi, các hào động quan trọng — viết 3-5 câu ngắn gọn nhưng đủ ý để tham khảo cho lần luận sau)';
+    // 4. Tạo prompt — Tách riêng System (chỉ kinh-dich.md) và User (quẻ + câu hỏi + hồ sơ ngữ cảnh)
     let systemPrompt = '';
     if (mdContent) {
       systemPrompt = `---\nKiến thức tham khảo:\n${mdContent}`;
     }
-    systemPrompt += summaryInstruction;
     const userPrompt = copyText + (question ? (' ' + question) : '') + historyContext;
 
     // 5. Gọi AI theo provider đã chọn cho nút bấm tương ứng
@@ -594,21 +745,8 @@ const bgAiService = {
       }
 
       if (aiResult && aiResult.length > 10) {
-        // Tách tóm tắt linh hoạt (chấp nhận cả **, ###, [TÓM TẮT], TÓM TẮT: ...)
-        let summary = "";
-        const summaryMatch = aiResult.match(/(?:^|\n)\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?\s*([\s\S]+)$/i);
-        if (summaryMatch && summaryMatch[1] && summaryMatch[1].trim().length > 10) {
-          summary = summaryMatch[1].trim();
-          // Xóa phần tóm tắt khỏi nội dung copy trả về cho user
-          aiResult = aiResult.replace(/(?:\n+[-—~*_]*)*\s*(?:\n+\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?[\s\S]*)$/i, '').trim();
-        } else {
-          // Fallback an toàn: Nếu AI không theo đúng format, lấy đoạn đầu bài luận làm tóm tắt để không bao giờ mất ngữ cảnh
-          summary = aiResult.slice(0, 300).replace(/\n+/g, ' ').trim();
-        }
-
-        if (summary) {
-          await this.saveSummary(settings.syncSheetUrl, conversationId, summary, customerName);
-        }
+        // Không lưu Google Sheet sau khi luận nữa (đã tổng hợp hồ sơ ở bước trước); chỉ cắt bỏ nếu model lỡ tự viết thêm [TÓM_TẮT]
+        aiResult = aiResult.replace(/(?:\n+[-—~*_]*)*\s*(?:\n+\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?[\s\S]*)$/i, '').trim();
 
         // ==============================================================
         // === BƯỚC 2: TỰ ĐỘNG GỌI AI VIẾT LẠI THEO PHONG CÁCH THỰC TẾ ===
@@ -687,7 +825,8 @@ const bgAiService = {
               content: rewrittenResult, 
               rawContent: aiResult, 
               model: settings.rewriteModel, 
-              triggerSource 
+              triggerSource,
+              savedAt: Date.now()
             })
           });
 
@@ -708,7 +847,8 @@ const bgAiService = {
               type: 'claude', 
               content: aiResult, 
               model: usedModelName, 
-              triggerSource 
+              triggerSource,
+              savedAt: Date.now()
             })
           });
 
@@ -730,7 +870,7 @@ const bgAiService = {
       // Fallback Gemini
       const resKey = `sa_res_${triggerSource}_${serial}`;
       await chrome.storage.local.set({
-        [resKey]: JSON.stringify({ type: 'gemini', content: copyText, triggerSource })
+        [resKey]: JSON.stringify({ type: 'gemini', content: copyText, triggerSource, savedAt: Date.now() })
       });
       await chrome.storage.local.remove('sa_running_' + serial);
 
@@ -756,6 +896,358 @@ const bgAiService = {
     } catch(e) {}
   }
 }
+};
+
+// === BACKGROUND CONTEXT PROFILE SERVICE (LẤY TỐI ĐA 500 TIN NHẮN & TỔNG HỢP HỒ SƠ) ===
+const bgContextService = {
+  MAX_PAGES: 25, // 25 lượt x 20 tin = tối đa 500 tin nhắn gần nhất
+  SKIP_PATTERNS: [
+    "tập trung nghĩ về",
+    "rút lấy 1 tờ tiền bất kỳ",
+    "rút 1 tờ tiền bất kỳ",
+    "hướng dẫn cách gieo khác",
+    "không có tiền mặt thì",
+    "mình gửi bạn giá các gói",
+    "chọn gói xem và chuyển khoản",
+    "nội dung ck:",
+    "ok bạn, để mình xem",
+    "bạn cân nhắc và tham khảo thông tin nhé",
+    "khi nào bạn cần xem thêm vấn đề nào khác",
+    "đã trả lời một quảng cáo",
+    "xem ngay với giá chỉ 20k",
+    "cần xem về vấn đề gì",
+    "mình gửi bạn bảng giá",
+    "bảng giá các gói dịch vụ",
+    "bạn ơi, quẻ mình gieo rồi ấy",
+    "bạn đợi mình chút"
+  ],
+  DIVINATION_KEYWORDS: /\b(hào|dụng thần|tử tôn|thê tài|quan quỷ|phụ mẫu|huynh đệ|tuần không|ứng kỳ|nguyệt lệnh|nhật thần|lục hợp|lục xung|phản ngâm|phục ngâm|hồi đầu|ám động|bạch hổ|chu tước|đằng xà|thanh long|huyền vũ|câu trần|vượng|suy|khắc)\b/i,
+
+  formatMsgTime(ts) {
+    try {
+      const d = new Date(Number(ts));
+      if (isNaN(d.getTime())) return "";
+      const p = n => String(n).padStart(2, '0');
+      return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    } catch {
+      return "";
+    }
+  },
+
+  async fetchSapoMessages(convId, token, tenant) {
+    if (!convId || convId === 'default') throw new Error('Thiếu mã hội thoại Sapo');
+    if (!token) throw new Error('Chưa bắt được Token Sapo');
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Bizweb-App-Fpage-Token': token,
+      'X-Sapo-Tenant': tenant || 'janet.mysapo.net'
+    };
+
+    const allMsgs = [];
+    const seenIds = new Set();
+    let lastTime = null;
+    let userMeta = { name: '', gender: '' };
+    let pagesFetched = 0;
+    let lastAdded = 0;
+
+    for (let page = 1; page <= this.MAX_PAGES; page++) {
+      let url = `https://sapo-socials.sapoapps.vn/api/conversations/${encodeURIComponent(convId)}/messages?language=vi`;
+      if (lastTime) url += `&last_time=${encodeURIComponent(lastTime)}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      let res;
+      try {
+        res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!res.ok) throw new Error(`Lỗi tải tin nhắn Sapo (HTTP ${res.status})`);
+      const data = await res.json();
+
+      if (page === 1) {
+        userMeta.name = data?.user?.name || data?.conversation?.account_name || '';
+        userMeta.gender = data?.user?.gender || '';
+      }
+
+      const msgs = Array.isArray(data?.messages) ? data.messages : [];
+      if (msgs.length === 0) break;
+
+      pagesFetched = page;
+      let added = 0;
+      let oldestTs = Infinity;
+
+      for (const m of msgs) {
+        const ts = Number(m.channel_created_on || 0);
+        if (ts > 0 && ts < oldestTs) oldestTs = ts;
+        if (m.id && !seenIds.has(m.id)) {
+          seenIds.add(m.id);
+          allMsgs.push(m);
+          added++;
+        }
+      }
+
+      lastAdded = added;
+      if (added === 0 || !Number.isFinite(oldestTs)) break;
+      lastTime = oldestTs;
+    }
+
+    allMsgs.sort((a, b) => Number(a.channel_created_on || 0) - Number(b.channel_created_on || 0));
+    const hitCap = (pagesFetched >= this.MAX_PAGES && lastAdded > 0);
+    return { messages: allMsgs, userMeta, hitCap };
+  },
+
+  filterMessages(messages) {
+    const filteredLines = [];
+    const shopManualTexts = [];
+
+    for (const m of messages) {
+      if (m.type !== 'text') continue;
+      if (m.action === 'SEND_AUTOMATION_MESSAGE') continue;
+
+      const txt = String(m.content || '').trim();
+      if (!txt || txt.length <= 2) continue;
+
+      const isShop = !!m.is_page_message;
+      const lower = txt.toLowerCase();
+      // Chỉ lọc mẫu câu hướng dẫn/bảng giá ở tin nhắn phía SHOP, tuyệt đối không lọc tin nhắn của KHÁCH
+      if (isShop && this.SKIP_PATTERNS.some(pat => lower.includes(pat))) continue;
+
+      const dt = this.formatMsgTime(m.channel_created_on);
+      const senderLabel = isShop ? 'THẦY (SHOP)' : 'KHÁCH';
+
+      filteredLines.push(`${dt ? `[${dt}] ` : ''}${senderLabel}: ${txt}`);
+      if (isShop) shopManualTexts.push(txt);
+    }
+
+    return { filteredLines, shopManualTexts };
+  },
+
+  isNewCustomer(shopManualTexts, oldSheetText) {
+    if (oldSheetText && oldSheetText.trim().length > 0) return false;
+    for (const txt of shopManualTexts) {
+      if (txt.length >= 80) return false;
+      if (txt.length >= 25 && this.DIVINATION_KEYWORDS.test(txt)) return false;
+    }
+    return true;
+  },
+
+  async summarizeContext({ apiKey, model, customerName, gender, filteredLines, oldSheetText, hitCap }) {
+    if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key');
+    const useModel = model || 'gemini-3.5-flash-lite';
+
+    const systemPrompt = [
+      'Bạn là trợ lý phân tích và lập hồ sơ khách hàng xem Kinh Dịch Lục Hào.',
+      'Nhiệm vụ: Đọc dữ liệu hội thoại (và hồ sơ cũ nếu có), tổng hợp thành 1 BẢN HỒ SƠ NGỮ CẢNH ĐẦY ĐỦ, CHÍNH XÁC TUYỆT ĐỐI.',
+      '',
+      'QUY TẮC BẮT BUỘC:',
+      '1. Không bỏ sót bất kỳ thông tin cá nhân (tên, giới tính, tuổi/năm sinh), con số tiền bạc, mốc thời gian, tình tiết câu chuyện, tên quẻ, hào động, dụng thần, kết luận Cát/Hung và Ứng Kỳ nào.',
+      '2. Bắt trọn cả những câu luận giải ngắn của Thầy (Shop) và toàn bộ phản hồi/diễn biến thực tế của khách sau khi xem quẻ.',
+      '3. Chỉ dùng thông tin có trong dữ liệu, không tự suy diễn thêm; chỗ nào không có thì ghi "Chưa rõ". Nếu diễn biến mới khác trước, ghi nhận rõ quá trình thay đổi và chốt trạng thái mới nhất ở tin nhắn cuối cùng.',
+      '4. Trình bày chi tiết, đầy đủ nhất đối với 5-7 lần xem gần nhất; các lần xem quá cũ (nếu có nhiều hơn) thì tóm lược ý chính và kết luận để tổng độ dài toàn bài không vượt quá 2.500 - 3.000 từ. Không viết lời chào mở đầu hay kết thúc.',
+      '',
+      'CẤU TRÚC BẢN HỒ SƠ:',
+      '1. HỒ SƠ & THÔNG TIN CÁ NHÂN KHÁCH HÀNG:',
+      '   - Tên khách, giới tính, tuổi/năm sinh, nghề nghiệp/hoàn cảnh và các đối tượng liên quan.',
+      '2. LỊCH SỬ CÁC QUẺ ĐÃ XEM & DIỄN BIẾN THỰC TẾ THEO THỜI GIAN:',
+      '   - Liệt kê theo từng lần xem (Ngày giờ -> Câu hỏi & Hoàn cảnh khách chia sẻ -> Quẻ & Luận giải/Kết luận/Ứng kỳ của Thầy -> Phản hồi/Diễn biến thực tế của khách sau đó).',
+      '3. GHI CHÚ QUAN TRỌNG ĐỂ KHÔNG MÂU THUẪN KHI LUẬN QUẺ TIẾP THEO:',
+      '   - Trạng thái sự việc hiện tại tính đến tin nhắn cuối cùng đang dừng ở đâu?',
+      '   - Các kết luận và mốc Ứng Kỳ cốt lõi Thầy đã chốt mà lần luận tiếp theo phải giữ đúng mạch, tuyệt đối không mâu thuẫn.'
+    ].join('\n');
+
+    const genderLabel = gender === 'female' ? 'Nữ' : (gender === 'male' ? 'Nam' : (gender || 'Chưa rõ'));
+    let userPrompt = `Khách hàng: ${customerName || 'Khách Hàng'} | Giới tính: ${genderLabel}\n`;
+    if (hitCap && oldSheetText) {
+      userPrompt += `\n[HỒ SƠ ĐÃ LƯU TRƯỚC ĐÓ TRÊN GOOGLE SHEET (cho giai đoạn cũ hơn 500 tin gần nhất)]:\n${oldSheetText}\n`;
+    }
+    userPrompt += `\n[LỊCH SỬ HỘI THOẠI TRÊN SAPO (Đã lọc ${filteredLines.length} tin nhắn cốt lõi)]:\n${filteredLines.join('\n')}`;
+
+    const payload = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userPrompt }] }]
+    };
+
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const json = await bgAiService.callModel(useModel, apiKey, payload, 120000);
+        const text = (json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
+        return text;
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e?.message || '').toLowerCase();
+        const isTransient = !!(e?.quota || e?.name === 'AbortError' || msg.includes('429') || msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504') || msg.includes('fetch') || msg.includes('network') || msg.includes('overloaded'));
+        if (attempt < 2 && isTransient) {
+          console.warn(`[SA-BG] Tổng hợp hồ sơ gặp lỗi tạm (${e.message}), thử lại sau 2.5s...`);
+          await new Promise(r => setTimeout(r, 2500));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr || new Error('Lỗi tổng hợp hồ sơ');
+  },
+
+  async runContextBuild({ serial, convId, customerName, sapoToken, tenant }) {
+    bgStartKeepAlive();
+    cleanupExpiredLocalStorage();
+    const ctxKey = `sa_ctx_${convId}_${serial}`;
+    const unlockKey = `sa_unlock_${convId}_${serial}`;
+    const runKey = `sa_ctx_running_${convId}_${serial}`;
+
+    const sendStatus = (msg) => {
+      broadcastMessage({
+        action: 'CTX_STATUS',
+        serial,
+        convId,
+        customerName,
+        message: msg
+      });
+    };
+
+    try {
+      sendStatus('Đang tải tin nhắn Sapo & kiểm tra Sheet...');
+      const settings = await bgAiService.getSettings();
+
+      const [msgOutcome, sheetOutcome] = await Promise.allSettled([
+        this.fetchSapoMessages(convId, sapoToken, tenant),
+        bgAiService.fetchSheet(settings.syncSheetUrl, { action: 'get', convId })
+      ]);
+
+      const sheetExtracted = (sheetOutcome.status === 'fulfilled')
+        ? bgAiService.extractSheetContext(sheetOutcome.value)
+        : { text: '', updatedAt: '', items: [] };
+      const oldSheetText = sheetExtracted.text;
+      const oldUpdatedAt = sheetExtracted.updatedAt;
+
+      if (msgOutcome.status === 'rejected') {
+        const errMsg = msgOutcome.reason?.message || 'Lỗi tải tin nhắn Sapo';
+        console.warn('[SA-BG] Không tải được tin nhắn Sapo, fallback Sheet:', errMsg);
+        const statusType = oldSheetText ? 'fallback' : 'error_no_old';
+        await chrome.storage.local.set({
+          [ctxKey]: { type: statusType, content: oldSheetText, time: oldUpdatedAt, error: errMsg, convId, serial, savedAt: Date.now() },
+          [unlockKey]: { unlockedAt: Date.now(), convId, serial }
+        });
+        await chrome.storage.local.remove(runKey);
+        broadcastMessage({
+          action: 'CTX_DONE',
+          serial,
+          convId,
+          status: statusType,
+          content: oldSheetText,
+          time: oldUpdatedAt,
+          error: errMsg,
+          customerName
+        });
+        return;
+      }
+
+      const { messages, userMeta, hitCap } = msgOutcome.value;
+      const finalName = customerName || userMeta.name || 'Khách Hàng';
+      const { filteredLines, shopManualTexts } = this.filterMessages(messages);
+
+      if (this.isNewCustomer(shopManualTexts, oldSheetText)) {
+        await chrome.storage.local.set({
+          [ctxKey]: { type: 'new_customer', content: '', time: '', convId, serial, savedAt: Date.now() },
+          [unlockKey]: { unlockedAt: Date.now(), convId, serial }
+        });
+        await chrome.storage.local.remove(runKey);
+        broadcastMessage({
+          action: 'CTX_DONE',
+          serial,
+          convId,
+          status: 'new_customer',
+          rawCount: messages.length,
+          filteredCount: filteredLines.length,
+          customerName: finalName
+        });
+        return;
+      }
+
+      const useModel = settings.model || 'gemini-3.5-flash-lite';
+      sendStatus(`Đã đọc ${messages.length} tin (lọc ${filteredLines.length} tin). Đang tổng hợp (${useModel})...`);
+
+      try {
+        const profileText = await this.summarizeContext({
+          apiKey: settings.apiKey,
+          model: useModel,
+          customerName: finalName,
+          gender: userMeta.gender,
+          filteredLines,
+          oldSheetText,
+          hitCap
+        });
+
+        sendStatus('Đang lưu hồ sơ lên Google Sheet...');
+        const postRes = await bgAiService.saveSheetPost(settings.syncSheetUrl, {
+          convId,
+          customerName: finalName,
+          profileText
+        });
+        const nowTime = (postRes && postRes.time) ? postRes.time : new Date().toLocaleString('vi-VN');
+        const sheetSaved = !!(postRes && postRes.success);
+
+        await chrome.storage.local.set({
+          [ctxKey]: {
+            type: 'ok',
+            content: profileText,
+            time: nowTime,
+            sheetSaved,
+            convId,
+            serial,
+            savedAt: Date.now()
+          },
+          [unlockKey]: { unlockedAt: Date.now(), convId, serial }
+        });
+        await chrome.storage.local.remove(runKey);
+        broadcastMessage({
+          action: 'CTX_DONE',
+          serial,
+          convId,
+          status: 'ok',
+          content: profileText,
+          time: nowTime,
+          sheetSaved,
+          rawCount: messages.length,
+          filteredCount: filteredLines.length,
+          customerName: finalName
+        });
+      } catch (aiErr) {
+        const errMsg = aiErr?.message || 'Lỗi AI tổng hợp hồ sơ';
+        console.warn('[SA-BG] Tổng hợp hồ sơ AI lỗi, fallback Sheet:', errMsg);
+        const statusType = oldSheetText ? 'fallback' : 'error_no_old';
+        await chrome.storage.local.set({
+          [ctxKey]: { type: statusType, content: oldSheetText, time: oldUpdatedAt, error: errMsg, convId, serial, savedAt: Date.now() },
+          [unlockKey]: { unlockedAt: Date.now(), convId, serial }
+        });
+        await chrome.storage.local.remove(runKey);
+        broadcastMessage({
+          action: 'CTX_DONE',
+          serial,
+          convId,
+          status: statusType,
+          content: oldSheetText,
+          time: oldUpdatedAt,
+          error: errMsg,
+          customerName: finalName
+        });
+      }
+    } finally {
+      bgStopKeepAlive();
+      try {
+        const portName = 'sa_keepalive_ctx_' + serial;
+        if (typeof _bgKeepAlivePorts !== 'undefined' && _bgKeepAlivePorts.has(portName)) {
+          const p = _bgKeepAlivePorts.get(portName);
+          if (p) p.disconnect();
+          _bgKeepAlivePorts.delete(portName);
+        }
+      } catch (e) {}
+    }
+  }
 };
 
 function broadcastMessage(msg) {
@@ -793,6 +1285,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
   if (msg.action === 'startAiQue') {
     const { serial, date, tz = '+07:00', question, customerName, conversationId, triggerSource = 'luan' } = msg;
+    cleanupExpiredLocalStorage();
     chrome.storage.local.set({
       ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '', triggerSource, tz }
     });
@@ -811,6 +1304,63 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
 
     sendResponse({ started: true });
+    return true;
+  }
+
+  // Bắt đầu lấy tin nhắn & tổng hợp Hồ sơ ngữ cảnh (nút 📋)
+  if (msg.action === 'startContextBuild') {
+    const { serial, convId, customerName, sapoToken, tenant } = msg;
+    const runKey = `sa_ctx_running_${convId}_${serial}`;
+    chrome.storage.local.set({
+      [runKey]: { startTime: Date.now(), customerName: customerName || '', convId, serial }
+    });
+
+    bgContextService.runContextBuild({ serial, convId, customerName, sapoToken, tenant })
+      .catch((err) => {
+        console.error('[SA-BG] Lỗi chạy task Hồ sơ ngữ cảnh:', err);
+        chrome.storage.local.remove(runKey);
+        chrome.storage.local.set({
+          [`sa_unlock_${convId}_${serial}`]: { unlockedAt: Date.now(), convId, serial }
+        });
+        broadcastMessage({
+          action: 'CTX_DONE',
+          serial,
+          convId,
+          status: 'error_no_old',
+          error: err?.message || 'Lỗi không xác định',
+          customerName
+        });
+      });
+
+    sendResponse({ started: true });
+    return true;
+  }
+
+  // Lấy giờ cập nhật ngữ cảnh lần cuối từ Google Sheet cho nút 📋
+  if (msg.action === 'getContextMeta') {
+    const convId = msg.convId;
+    if (!convId || convId === 'default') {
+      sendResponse({ success: true, hasContext: false, updatedAt: '' });
+      return true;
+    }
+    (async () => {
+      try {
+        const settings = await bgAiService.getSettings();
+        if (!settings.syncSheetUrl) {
+          sendResponse({ success: true, hasContext: false, updatedAt: '' });
+          return;
+        }
+        const res = await bgAiService.fetchSheet(settings.syncSheetUrl, { action: 'get', convId });
+        const extracted = bgAiService.extractSheetContext(res);
+        sendResponse({
+          success: true,
+          hasContext: extracted.items.length > 0,
+          updatedAt: extracted.updatedAt || ''
+        });
+      } catch (e) {
+        sendResponse({ success: false, hasContext: false, updatedAt: '' });
+      }
+    })();
     return true;
   }
 
