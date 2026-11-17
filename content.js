@@ -919,6 +919,64 @@ try {
         return btn;
       },
 
+      createResetHistButton(serial, convId, btnClass, stopAllFn) {
+        const self = SapoAuto_v1;
+        const btn = document.createElement("button");
+        btn.className = `${btnClass} btn-reset-hist`;
+        btn.dataset.serial = serial;
+        btn.dataset.convId = convId;
+        btn.textContent = "🔄";
+        btn.title = "Xóa ngữ cảnh cũ (hoặc bỏ qua lấy HS) & mở khóa Gemini/Khác";
+        btn.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
+        if (stopAllFn) {
+          btn.onmousedown = stopAllFn;
+          btn.onmouseup = stopAllFn;
+        } else {
+          btn.onmousedown = (e) => e.stopPropagation();
+          btn.onmouseup = (e) => e.stopPropagation();
+        }
+        btn.onclick = async (e) => {
+          if (stopAllFn) stopAllFn(e);
+          else { e.stopPropagation(); e.preventDefault(); }
+
+          const cId = convId || self.utils.getActiveConversationId();
+          const ctxKey = `sa_ctx_${cId}_${serial}`;
+          const unlockKey = `sa_unlock_${cId}_${serial}`;
+          const cachedMeta = self.STATE.contextMetaCache.get(cId);
+          const skipSheetDelete = !!(cachedMeta && cachedMeta.hasContext === false);
+
+          btn.disabled = true;
+          btn.style.opacity = "0.3";
+          try {
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              await new Promise(resolve => chrome.storage.local.remove([ctxKey], resolve));
+            }
+            if (!skipSheetDelete) {
+              await self.aiService.conversationHistory.clear(cId);
+            }
+            self.STATE.contextMetaCache.set(cId, { hasContext: false, updatedAt: '', fetchedAt: Date.now() });
+            if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+              await new Promise(resolve => {
+                chrome.storage.local.set({
+                  [unlockKey]: { unlockedAt: Date.now(), convId: cId, serial, resetAt: Date.now() }
+                }, resolve);
+              });
+            }
+            self.ui.syncContextUi(serial, cId);
+            self.utils.toast(
+              skipSheetDelete
+                ? "🔓 Đã mở khóa nhanh (Chưa có hồ sơ — sẵn sàng luận mới!)."
+                : "🔄 Đã xóa ngữ cảnh trên Sheet & mở khóa Gemini/Khác để luận mới!",
+              "success"
+            );
+          } finally {
+            btn.disabled = false;
+            setTimeout(() => { btn.style.opacity = "0.6"; }, 800);
+          }
+        };
+        return btn;
+      },
+
       syncContextUi(serial, convId) {
         const self = SapoAuto_v1;
         const activeConvId = convId || self.utils.getActiveConversationId();
@@ -1297,22 +1355,7 @@ try {
           self.ui.applyRunningState(btnC, val, 'luan');
           actionGroup.appendChild(btnC);
 
-          const btnResetHist = document.createElement("button");
-          btnResetHist.className = "sa-mini-btn btn-reset-hist";
-          btnResetHist.textContent = "🔄";
-          btnResetHist.title = "Xóa ngữ cảnh các quẻ trước (reset lịch sử)";
-          btnResetHist.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
-          btnResetHist.onclick = async (e) => {
-            stopAll(e);
-            const cId = self.utils.getActiveConversationId();
-            await self.aiService.conversationHistory.clear(cId);
-            self.STATE.contextMetaCache.delete(cId);
-            self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
-            btnResetHist.style.opacity = "0.3";
-            setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
-            self.ui.syncContextUi(val, cId);
-          };
-          btnResetHist.onmousedown = stopAll; btnResetHist.onmouseup = stopAll;
+          const btnResetHist = self.ui.createResetHistButton(val, activeConvId, "sa-mini-btn", stopAll);
           actionGroup.appendChild(btnResetHist);
 
           const btnTxtOnly = document.createElement("button");
@@ -1472,22 +1515,7 @@ try {
         self.ui.applyRunningState(btnTxt, numOnly, 'luan');
         badge.appendChild(btnTxt);
 
-        const btnResetHist = document.createElement("button");
-        btnResetHist.className = "sa-text-btn btn-reset-hist";
-        btnResetHist.textContent = "🔄";
-        btnResetHist.title = "Xóa ngữ cảnh các quẻ trước (reset lịch sử)";
-        btnResetHist.style.cssText = "min-width:22px;max-width:22px;padding:2px;font-size:11px;opacity:0.6;";
-        btnResetHist.onclick = async () => {
-          const cId = self.utils.getActiveConversationId();
-          await self.aiService.conversationHistory.clear(cId);
-          self.STATE.contextMetaCache.delete(cId);
-          self.utils.toast("🔄 Đã xóa ngữ cảnh hội thoại. Luận mới sẽ bắt đầu từ đầu.", "success");
-          btnResetHist.style.opacity = "0.3";
-          setTimeout(() => { btnResetHist.style.opacity = "0.6"; }, 1500);
-          self.ui.syncContextUi(numOnly, cId);
-        };
-        btnResetHist.onmousedown = (e) => e.stopPropagation();
-        btnResetHist.onmouseup = (e) => e.stopPropagation();
+        const btnResetHist = self.ui.createResetHistButton(numOnly, activeConvId, "sa-text-btn");
         badge.appendChild(btnResetHist);
 
         const btnTxtOnly = document.createElement("button");
