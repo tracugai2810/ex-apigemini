@@ -82,7 +82,9 @@ try {
         try {
           const key = this._key(imgSrc);
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-            chrome.storage.local.set({ [key]: serial });
+            chrome.storage.local.set({
+              [key]: { serial: String(serial || ""), savedAt: Date.now() }
+            });
           }
         } catch(e) {}
       },
@@ -91,7 +93,22 @@ try {
           const key = this._key(imgSrc);
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
             chrome.storage.local.get([key], (res) => {
-              cb(res?.[key] || "");
+              const raw = res?.[key];
+              if (!raw) { cb(""); return; }
+              if (typeof raw === 'string') {
+                cb(raw);
+                return;
+              }
+              if (typeof raw === 'object') {
+                if (raw.savedAt && (Date.now() - raw.savedAt > 86400000)) {
+                  chrome.storage.local.remove(key);
+                  cb("");
+                  return;
+                }
+                cb(raw.serial || "");
+                return;
+              }
+              cb("");
             });
           } else {
             cb("");
@@ -445,10 +462,9 @@ try {
         if (!str) return "";
         const s = String(str).trim();
         const timeMatch = s.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
-        const dateMatch = s.match(/(\d{1,2}\/\d{1,2})(?:\/\d{2,4})?/);
-        if (dateMatch && timeMatch) return `${dateMatch[1]} ${timeMatch[1]}`;
-        if (dateMatch) return dateMatch[1];
         if (timeMatch) return timeMatch[1];
+        const dateMatch = s.match(/(\d{1,2}\/\d{1,2})(?:\/\d{2,4})?/);
+        if (dateMatch) return dateMatch[1];
         return s.slice(0, 14);
       },
 
@@ -786,6 +802,9 @@ try {
                 chrome.storage.local.remove([specificKey]);
                 return;
               }
+              if (!btn._origOnClick && typeof originalOnClick === 'function') {
+                btn._origOnClick = originalOnClick;
+              }
               btn.textContent = "Copy";
               btn.disabled = false;
               btn.classList.remove("sa-ctx-locked");
@@ -845,18 +864,30 @@ try {
                        });
                      }
                    }
-                   btn.textContent = originalText || (btnType === 'chu' ? "Khác" : "Gemini");
-                   btn.style.background = "";
-                   btn.style.color = "";
-                   btn.style.boxShadow = "";
-                   btn.disabled = false;
-                   if (typeof originalOnClick === 'function') {
-                     btn.onclick = originalOnClick;
-                   }
+                   const sameSel = (btnType === 'chu')
+                     ? `.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`
+                     : `.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`;
+                   const restoreLabel = originalText || (btnType === 'chu' ? "Khác" : "Gemini");
+                   const sameBtns = document.querySelectorAll(sameSel);
+                   const targets = sameBtns.length > 0 ? Array.from(sameBtns) : [btn];
+                   targets.forEach(b => {
+                     b.textContent = restoreLabel;
+                     b.style.background = "";
+                     b.style.color = "";
+                     b.style.boxShadow = "";
+                     b.disabled = false;
+                     if (b._origOnClick) {
+                       b.onclick = b._origOnClick;
+                     } else if (typeof originalOnClick === 'function') {
+                       b.onclick = originalOnClick;
+                     }
+                   });
                    // Bấm Copy xong là XÓA NGAY LẬP TỨC KHỎI KHO EXTENSION
                    chrome.storage.local.remove([specificKey]);
                    // Đồng bộ lại trạng thái nếu nút còn lại đang chạy ngầm + trạng thái mở khóa ngữ cảnh
-                   SapoAuto_v1.ui.applyRunningState(btn, serial, btnType);
+                   targets.forEach(b => {
+                     SapoAuto_v1.ui.applyRunningState(b, serial, btnType);
+                   });
                    SapoAuto_v1.ui.syncContextUi(serial, SapoAuto_v1.utils.getActiveConversationId());
                  } catch (err) {
                    SapoAuto_v1.utils.toast("❌ Lỗi copy: " + err.message, "error");
@@ -873,6 +904,9 @@ try {
             chrome.storage.local.get(["sa_running_" + serial], (res) => {
               const run = res?.[("sa_running_" + serial)];
               if (run && run.startTime && (Date.now() - run.startTime < 240000)) {
+                if (SapoAuto_v1.STATE?.activePorts && !SapoAuto_v1.STATE.activePorts.has(serial)) {
+                  SapoAuto_v1.utils.startKeepAlivePort(serial);
+                }
                 if (run.triggerSource === btnType) {
                   btn.textContent = "⌛...";
                   btn.disabled = true;
@@ -904,7 +938,8 @@ try {
         btn.className = `${btnClass} btn-ctx`;
         btn.dataset.serial = serial;
         btn.dataset.convId = convId;
-        btn.textContent = "📋 HS...";
+        btn.textContent = "📋 Hồ sơ";
+        btn.title = "Bấm để quét tin nhắn & tổng hợp Hồ sơ ngữ cảnh";
         if (stopAllFn) {
           btn.onmousedown = stopAllFn;
           btn.onmouseup = stopAllFn;
@@ -938,23 +973,41 @@ try {
         btn.onclick = async (e) => {
           if (stopAllFn) stopAllFn(e);
           else { e.stopPropagation(); e.preventDefault(); }
+          if (btn.disabled) return;
 
           const cId = convId || self.utils.getActiveConversationId();
           const ctxKey = `sa_ctx_${cId}_${serial}`;
           const unlockKey = `sa_unlock_${cId}_${serial}`;
-          const cachedMeta = self.STATE.contextMetaCache.get(cId);
-          const skipSheetDelete = !!(cachedMeta && cachedMeta.hasContext === false);
 
-          btn.disabled = true;
-          btn.style.opacity = "0.3";
+          const resetBtns = document.querySelectorAll(`.btn-reset-hist[data-serial="${serial}"]`);
+          const ctxBtns = document.querySelectorAll(`.btn-ctx[data-serial="${serial}"]`);
+          const aiBtns = document.querySelectorAll(
+            `.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"], .btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`
+          );
+
+          resetBtns.forEach(b => {
+            b.disabled = true;
+            b.textContent = "⏳";
+            b.style.opacity = "1";
+          });
+          ctxBtns.forEach(b => {
+            b.disabled = true;
+            b.style.opacity = "0.5";
+          });
+          aiBtns.forEach(b => {
+            if (b.textContent !== "Copy") {
+              b.classList.add("sa-ctx-locked");
+              if (b.textContent !== "⌛...") {
+                b.title = "🔒 Đang xóa ngữ cảnh trên Sheet, vui lòng đợi...";
+              }
+            }
+          });
+
           try {
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-              await new Promise(resolve => chrome.storage.local.remove([ctxKey], resolve));
+              await new Promise(resolve => chrome.storage.local.remove([ctxKey, unlockKey], resolve));
             }
-            if (!skipSheetDelete) {
-              await self.aiService.conversationHistory.clear(cId);
-            }
-            self.STATE.contextMetaCache.set(cId, { hasContext: false, updatedAt: '', fetchedAt: Date.now() });
+            await self.aiService.conversationHistory.clear(cId);
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
               await new Promise(resolve => {
                 chrome.storage.local.set({
@@ -962,16 +1015,14 @@ try {
                 }, resolve);
               });
             }
-            self.ui.syncContextUi(serial, cId);
-            self.utils.toast(
-              skipSheetDelete
-                ? "🔓 Đã mở khóa nhanh (Chưa có hồ sơ — sẵn sàng luận mới!)."
-                : "🔄 Đã xóa ngữ cảnh trên Sheet & mở khóa Gemini/Khác để luận mới!",
-              "success"
-            );
+            self.utils.toast("🔄 Đã xóa ngữ cảnh trên Sheet & mở khóa Gemini/Khác để luận mới!", "success");
           } finally {
-            btn.disabled = false;
-            setTimeout(() => { btn.style.opacity = "0.6"; }, 800);
+            resetBtns.forEach(b => {
+              b.disabled = false;
+              b.textContent = "🔄";
+              b.style.opacity = "0.6";
+            });
+            self.ui.syncContextUi(serial, cId);
           }
         };
         return btn;
@@ -987,6 +1038,8 @@ try {
         const unlockKey = `sa_unlock_${activeConvId}_${serial}`;
 
         const ctxBtns = Array.from(document.querySelectorAll(`.btn-ctx[data-serial="${serial}"]`))
+          .filter(b => !b.dataset.convId || b.dataset.convId === activeConvId);
+        const resetBtns = Array.from(document.querySelectorAll(`.btn-reset-hist[data-serial="${serial}"]`))
           .filter(b => !b.dataset.convId || b.dataset.convId === activeConvId);
         const aiBtns = Array.from(document.querySelectorAll(
           `.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"], .btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`
@@ -1008,6 +1061,22 @@ try {
 
           const hasValidCtx = !!(ctxData && (!ctxData.savedAt || now - ctxData.savedAt <= 86400000));
           if (ctxData && !hasValidCtx) chrome.storage.local.remove(ctxKey);
+
+          if (isRunning && self.STATE?.activePorts && !self.STATE.activePorts.has('ctx_' + serial)) {
+            self.utils.startKeepAlivePort('ctx_' + serial);
+          }
+
+          resetBtns.forEach(b => {
+            if (isRunning) {
+              if (b.textContent !== "⏳") {
+                b.disabled = true;
+                b.style.opacity = "0.3";
+              }
+            } else if (b.textContent !== "⏳") {
+              b.disabled = false;
+              b.style.opacity = "0.6";
+            }
+          });
 
           // 1. Cập nhật khóa/mở khóa cho 2 nút Gemini & Khác (nếu đang là nút Copy kết quả cũ thì không khóa)
           aiBtns.forEach(b => {
@@ -1045,8 +1114,8 @@ try {
               ctxBtn.textContent = (isFallback ? "⚠️ Copy HS cũ" : "📋 Copy HS") + (shortT ? ` (${shortT})` : "");
               ctxBtn.classList.add(isFallback ? "sa-ctx-warn" : "sa-ctx-ready");
               ctxBtn.title = isFallback
-                ? `Tạo mới lỗi (${ctxData.error || 'API'}) -> Bấm copy bản cũ trên Sheet`
-                : "Bấm để Copy Hồ sơ ngữ cảnh (dán vào Gemini web). Gemini/Khác đã mở khóa!";
+                ? `Tạo mới lỗi (${ctxData.error || 'API'}) -> Bấm copy bản cũ trên Sheet${ctxData.time ? ` (${ctxData.time})` : ''}`
+                : `Cập nhật: ${ctxData.time || shortT || 'mới nhất'} — Bấm để Copy Hồ sơ ngữ cảnh (dán vào Gemini web). Gemini/Khác đã mở khóa!`;
               ctxBtn.onclick = async (e) => {
                 e.stopPropagation(); e.preventDefault();
                 try {
@@ -1065,7 +1134,7 @@ try {
             if (hasValidCtx && ctxData.type === 'new_customer') {
               ctxBtn.textContent = "✅ Khách mới";
               ctxBtn.classList.add("sa-ctx-new");
-              ctxBtn.title = "Khách mới chưa có lịch sử luận trước đó. Bấm lại để quét lại nếu cần.";
+              ctxBtn.title = "Đoạn chat chưa có tin nhắn chữ. Bấm lại để quét lại nếu cần.";
               ctxBtn.onclick = (e) => {
                 e.stopPropagation(); e.preventDefault();
                 self.textScan.runContextBuild(serial, activeConvId);
@@ -1076,7 +1145,7 @@ try {
             if (hasValidCtx && ctxData.type === 'error_no_old') {
               ctxBtn.textContent = "⚠️ Lỗi HS";
               ctxBtn.classList.add("sa-ctx-warn");
-              ctxBtn.title = `Lỗi lấy HS (${ctxData.error || 'mạng'}) và Sheet chưa có bản cũ. Bấm để thử lại.`;
+              ctxBtn.title = `Lỗi lấy HS (${ctxData.error || 'mạng'}). Bấm để thử lại.`;
               ctxBtn.onclick = (e) => {
                 e.stopPropagation(); e.preventDefault();
                 self.textScan.runContextBuild(serial, activeConvId);
@@ -1084,26 +1153,13 @@ try {
               return;
             }
 
-            // Chưa chạy trên máy này (hoặc đã bấm Copy xong): hiển thị giờ cập nhật từ Google Sheet
-            ctxBtn.textContent = "📋 HS...";
+            // Trạng thái tĩnh mặc định: không tự gọi Google Sheet khi mở đoạn chat
+            ctxBtn.textContent = "📋 Hồ sơ";
+            ctxBtn.title = "Bấm để quét tin nhắn & tổng hợp Hồ sơ ngữ cảnh";
             ctxBtn.onclick = (e) => {
               e.stopPropagation(); e.preventDefault();
               self.textScan.runContextBuild(serial, activeConvId);
             };
-            self.utils.getContextMeta(activeConvId).then((meta) => {
-              // Đảm bảo nút không bị chuyển sang trạng thái khác trong lúc chờ
-              if (ctxBtn.classList.contains("sa-ctx-running") || ctxBtn.classList.contains("sa-ctx-ready") || ctxBtn.classList.contains("sa-ctx-warn") || ctxBtn.classList.contains("sa-ctx-new")) {
-                return;
-              }
-              if (meta && meta.hasContext && meta.updatedAt) {
-                const shortT = self.utils.formatShortTime(meta.updatedAt);
-                ctxBtn.textContent = "📋 " + (shortT || "Hồ sơ");
-                ctxBtn.title = `Hồ sơ trên Google Sheet cập nhật lúc: ${meta.updatedAt}. Bấm để lấy hồ sơ mới nhất!`;
-              } else {
-                ctxBtn.textContent = "📋 Chưa có";
-                ctxBtn.title = "Chưa có hồ sơ trên Google Sheet. Bấm để quét tin nhắn & tạo hồ sơ!";
-              }
-            });
           });
         });
       },
@@ -1154,7 +1210,10 @@ try {
         badge.style.pointerEvents = "auto";
         badge.style.position = "absolute";
         badge.style.top = (window.scrollY + rect.top) + "px";
-        badge.style.left = (window.scrollX + rect.left + rect.width + 8) + "px";
+        const width = badge.offsetWidth || 298;
+        const rawLeft = window.scrollX + rect.left + rect.width + 8;
+        const maxLeft = Math.max(8, window.scrollX + window.innerWidth - width - 12);
+        badge.style.left = Math.min(rawLeft, maxLeft) + "px";
       },
 
       inject(img) {
@@ -1247,13 +1306,19 @@ try {
           actionGroup.innerHTML = "";
         };
 
-        const showActions = (val, isAuto) => {
+        const showActions = (val, isAuto, isRestore = false) => {
           inputRow.style.display = "none";
           actionGroup.style.display = "flex";
           actionGroup.innerHTML = "";
 
-          // Lưu seri vào storage theo đúng ảnh này
-          self.storage.save(img.src, val);
+          // Lưu seri vào storage theo đúng ảnh này (chỉ lưu mới, không reset giờ hết hạn khi restore)
+          if (!isRestore) {
+            self.storage.save(img.src, val);
+          }
+
+          // Hàng 1: Seri (trái) + Hủy (phải)
+          const headerRow = document.createElement("div");
+          headerRow.className = "sa-card-header";
 
           const label = document.createElement("span");
           label.className = "sa-serial-val" + (isAuto ? " auto-detected" : "");
@@ -1263,9 +1328,17 @@ try {
             navigator.clipboard.writeText(val);
             self.utils.toast("📋 Đã copy seri: " + val, "success");
           };
-          actionGroup.appendChild(label);
+          headerRow.appendChild(label);
 
-          // Datetime picker trong action group
+          const btnX = document.createElement("button");
+          btnX.className = "sa-mini-btn btn-x";
+          btnX.textContent = "✕ Hủy";
+          btnX.onclick = (e) => { stopAll(e); self.storage.clear(img.src); showInput(); };
+          btnX.onmousedown = stopAll; btnX.onmouseup = stopAll;
+          headerRow.appendChild(btnX);
+          actionGroup.appendChild(headerRow);
+
+          // Hàng 2: Datetime picker trong action group
           const pad = n => String(n).padStart(2, "0");
           const now = new Date();
           const localNow = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
@@ -1306,15 +1379,7 @@ try {
           const getPickerDate = () => dtPicker.value ? new Date(dtPicker.value) : null;
           const getPickerTz = () => tzSelect.value || "+07:00";
 
-          const btnA = document.createElement("button");
-          btnA.className = "sa-mini-btn btn-a";
-          btnA.dataset.serial = val;
-          btnA.textContent = "Ảnh";
-          btnA.onclick = (e) => { stopAll(e); self.textScan.runImage(val, btnA, getPickerDate(), getPickerTz()); };
-          btnA.onmousedown = stopAll; btnA.onmouseup = stopAll;
-          self.ui.applySavedStateImage(btnA, val, "Ảnh", btnA.onclick);
-          actionGroup.appendChild(btnA);
-
+          // Hàng 3: Ô nhập câu hỏi
           const questionInput = document.createElement("input");
           questionInput.type = "text";
           questionInput.className = "sa-question-input";
@@ -1342,8 +1407,30 @@ try {
           actionGroup.appendChild(questionInput);
 
           const activeConvId = self.utils.getActiveConversationId();
+
+          // Hàng 4a: Nút công cụ (Ảnh + Hồ sơ + 🔄)
+          const toolsRow = document.createElement("div");
+          toolsRow.className = "sa-card-tools";
+
+          const btnA = document.createElement("button");
+          btnA.className = "sa-mini-btn btn-a";
+          btnA.dataset.serial = val;
+          btnA.textContent = "Ảnh";
+          btnA.onclick = (e) => { stopAll(e); self.textScan.runImage(val, btnA, getPickerDate(), getPickerTz()); };
+          btnA.onmousedown = stopAll; btnA.onmouseup = stopAll;
+          self.ui.applySavedStateImage(btnA, val, "Ảnh", btnA.onclick);
+          toolsRow.appendChild(btnA);
+
           const btnCtx = self.ui.createContextButton(val, activeConvId, "sa-mini-btn", stopAll);
-          actionGroup.appendChild(btnCtx);
+          toolsRow.appendChild(btnCtx);
+
+          const btnResetHist = self.ui.createResetHistButton(val, activeConvId, "sa-mini-btn", stopAll);
+          toolsRow.appendChild(btnResetHist);
+          actionGroup.appendChild(toolsRow);
+
+          // Hàng 4b: 2 nút Luận chính (50/50)
+          const aiRow = document.createElement("div");
+          aiRow.className = "sa-card-ai";
 
           const btnC = document.createElement("button");
           btnC.className = "sa-mini-btn btn-c";
@@ -1353,10 +1440,7 @@ try {
           btnC.onmousedown = stopAll; btnC.onmouseup = stopAll;
           self.ui.applySavedState(btnC, val, "Gemini", btnC.onclick, 'luan');
           self.ui.applyRunningState(btnC, val, 'luan');
-          actionGroup.appendChild(btnC);
-
-          const btnResetHist = self.ui.createResetHistButton(val, activeConvId, "sa-mini-btn", stopAll);
-          actionGroup.appendChild(btnResetHist);
+          aiRow.appendChild(btnC);
 
           const btnTxtOnly = document.createElement("button");
           btnTxtOnly.className = "sa-mini-btn btn-c-only";
@@ -1366,16 +1450,11 @@ try {
           btnTxtOnly.onmousedown = stopAll; btnTxtOnly.onmouseup = stopAll;
           self.ui.applySavedState(btnTxtOnly, val, "Khác", btnTxtOnly.onclick, 'chu');
           self.ui.applyRunningState(btnTxtOnly, val, 'chu');
-          actionGroup.appendChild(btnTxtOnly);
+          aiRow.appendChild(btnTxtOnly);
+          actionGroup.appendChild(aiRow);
 
           self.ui.syncContextUi(val, activeConvId);
-
-          const btnX = document.createElement("button");
-          btnX.className = "sa-mini-btn btn-x";
-          btnX.textContent = "Hủy";
-          btnX.onclick = (e) => { stopAll(e); self.storage.clear(img.src); showInput(); };
-          btnX.onmousedown = stopAll; btnX.onmouseup = stopAll;
-          actionGroup.appendChild(btnX);
+          requestAnimationFrame(() => self.ui.sync(img, badge));
         };
 
         input.onkeydown = (e) => {
@@ -1405,7 +1484,7 @@ try {
         // AUTO-RESTORE: Chỉ restore seri của đúng ảnh này (theo img.src riêng)
         self.storage.load(img.src, (saved) => {
           if (saved && saved.length > 0) {
-            showActions(saved);
+            showActions(saved, false, true);
           }
         });
       },
@@ -1414,9 +1493,13 @@ try {
         const self = SapoAuto_v1;
         const numOnly = serial.replace(/\D/g, "");
         
-        // Tạo khối nút theo phong cách hàng ngang tinh gọn
-        const badge = document.createElement("div");
-        badge.className = "sa-text-actions"; // Dùng CSS đã tối ưu của bản v1.1
+        // Thẻ 3 tầng gọn gàng (chống tràn màn hình)
+        const card = document.createElement("div");
+        card.className = "sa-text-card";
+
+        // Tầng 1: Seri & Thời gian
+        const topRow = document.createElement("div");
+        topRow.className = "sa-text-top";
 
         // Datetime picker — giá trị mặc định = hiện tại
         const pad = n => String(n).padStart(2, "0");
@@ -1431,7 +1514,7 @@ try {
           navigator.clipboard.writeText(numOnly);
           self.utils.toast("📋 Đã copy seri", "success");
         };
-        badge.appendChild(label);
+        topRow.appendChild(label);
 
         // Datetime wrapper
         const dtWrap = document.createElement("span");
@@ -1466,18 +1549,12 @@ try {
         tzSelect.onkeydown = (e) => e.stopPropagation();
         dtWrap.appendChild(tzSelect);
 
-        badge.appendChild(dtWrap);
+        topRow.appendChild(dtWrap);
+        card.appendChild(topRow);
 
         const getPickerTz = () => tzSelect.value || "+07:00";
 
-        const btnImg = document.createElement("button");
-        btnImg.className = "sa-text-btn btn-img";
-        btnImg.dataset.serial = numOnly;
-        btnImg.textContent = "Ảnh";
-        btnImg.onclick = () => self.textScan.runImage(numOnly, btnImg, getPickerDate(), getPickerTz());
-        self.ui.applySavedStateImage(btnImg, numOnly, "Ảnh", btnImg.onclick);
-        badge.appendChild(btnImg);
-
+        // Tầng 2: Ô nhập câu hỏi
         const questionInput = document.createElement("input");
         questionInput.type = "text";
         questionInput.className = "sa-question-input";
@@ -1501,6 +1578,19 @@ try {
         questionInput.onclick = (e) => e.stopPropagation();
         questionInput.onmousedown = (e) => e.stopPropagation();
         questionInput.onkeydown = (e) => e.stopPropagation();
+        card.appendChild(questionInput);
+
+        // Tầng 3: Hàng nút bấm
+        const badge = document.createElement("div");
+        badge.className = "sa-text-actions";
+
+        const btnImg = document.createElement("button");
+        btnImg.className = "sa-text-btn btn-img";
+        btnImg.dataset.serial = numOnly;
+        btnImg.textContent = "Ảnh";
+        btnImg.onclick = () => self.textScan.runImage(numOnly, btnImg, getPickerDate(), getPickerTz());
+        self.ui.applySavedStateImage(btnImg, numOnly, "Ảnh", btnImg.onclick);
+        badge.appendChild(btnImg);
 
         const activeConvId = self.utils.getActiveConversationId();
         const btnCtx = self.ui.createContextButton(numOnly, activeConvId, "sa-text-btn");
@@ -1529,8 +1619,8 @@ try {
         self.ui.applyRunningState(btnTxtOnly, numOnly, 'chu');
         badge.appendChild(btnTxtOnly);
 
-        container.appendChild(badge);
-        container.appendChild(questionInput);
+        card.appendChild(badge);
+        container.appendChild(card);
         self.ui.syncContextUi(numOnly, activeConvId);
       }
     },
@@ -1558,6 +1648,8 @@ try {
         document.querySelectorAll(".content-text:not([data-sa-v19]), .msg-content:not([data-sa-v19]), .message-text:not([data-sa-v19]), .dialogue-text-content:not([data-sa-v19])").forEach(div => {
           // CHỐNG LẶP cho các trường hợp element con/cha bị lồng nhau (kiểm tra dataset O(1) trước)
           if (div.dataset.saV19 || div.closest("[data-sa-v19]") || div.querySelector(".sa-group")) return;
+
+          if (!/\d{6}/.test(div.textContent || "")) return;
 
           const txt = (div.innerText || "").trim();
           const matches = txt.match(/[a-zA-Z0-9]{0,5}\s?\d{6,12}/gi);
@@ -1805,7 +1897,17 @@ try {
 
         // Bắt tên khách hàng NGAY GIÂY PHÚT BẤM NÚT LUẬN (tránh bị lệch khi người dùng đổi tab chat)
         const capturedCustomerName = self.aiService.conversationHistory._getCustomerName();
-        if (btn) {
+        const sameSelector = (triggerSource === 'chu')
+          ? `.btn-c-only[data-serial="${serial}"], .btn-txt-only[data-serial="${serial}"]`
+          : `.btn-c[data-serial="${serial}"], .btn-txt[data-serial="${serial}"]`;
+        const sameBtns = document.querySelectorAll(sameSelector);
+        if (sameBtns.length > 0) {
+          sameBtns.forEach(b => {
+            b.textContent = "⌛...";
+            b.disabled = true;
+            b.style.opacity = "1";
+          });
+        } else if (btn) {
           btn.textContent = "⌛...";
           btn.disabled = true;
           btn.style.opacity = "1";
@@ -1928,11 +2030,44 @@ try {
         });
       } catch(e) {}
 
-      // === TIMER TỰ ĐỘNG KHÔI PHỤC NÚT BỊ TREO ⌛ (Kiểm tra mỗi 30 giây qua chrome.storage.local) ===
+      // === TIMER TỰ ĐỘNG KHÔI PHỤC NÚT BỊ TREO ⌛ (Kiểm tra mỗi 30 giây, chỉ đọc các key đang hoạt động) ===
       setInterval(() => {
         try {
           if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-            chrome.storage.local.get(null, (allData) => {
+            const serialSet = new Set();
+            const ctxPairs = new Map();
+            const activeConvId = self.utils.getActiveConversationId();
+
+            document.querySelectorAll('[data-serial]').forEach(el => {
+              const s = el.dataset.serial;
+              if (!s) return;
+              serialSet.add(s);
+              const cId = el.dataset.convId || activeConvId;
+              if (cId && cId !== 'default') {
+                ctxPairs.set(`sa_ctx_running_${cId}_${s}`, { convId: cId, serial: s });
+              }
+            });
+
+            if (self.STATE?.activePorts) {
+              for (const portKey of self.STATE.activePorts.keys()) {
+                if (portKey.startsWith('ctx_')) {
+                  const s = portKey.slice(4);
+                  serialSet.add(s);
+                  if (activeConvId && activeConvId !== 'default') {
+                    ctxPairs.set(`sa_ctx_running_${activeConvId}_${s}`, { convId: activeConvId, serial: s });
+                  }
+                } else {
+                  serialSet.add(portKey);
+                }
+              }
+            }
+
+            const keysToCheck = [];
+            serialSet.forEach(s => keysToCheck.push('sa_running_' + s));
+            ctxPairs.forEach((_, k) => keysToCheck.push(k));
+            if (keysToCheck.length === 0) return;
+
+            chrome.storage.local.get(keysToCheck, (allData) => {
               if (!allData) return;
               Object.keys(allData).forEach(k => {
                 if (k.startsWith("sa_running_")) {
@@ -1977,34 +2112,13 @@ try {
                   const run = allData[k];
                   if (!run || !run.startTime || Date.now() - run.startTime > 180000) {
                     chrome.storage.local.remove(k);
-                    if (run && run.serial) {
-                      self.utils.stopKeepAlivePort('ctx_' + run.serial);
-                      self.ui.syncContextUi(run.serial, run.convId || self.utils.getActiveConversationId());
+                    const meta = ctxPairs.get(k);
+                    const s = (run && run.serial) || (meta && meta.serial);
+                    const cId = (run && run.convId) || (meta && meta.convId) || self.utils.getActiveConversationId();
+                    if (s) {
+                      self.utils.stopKeepAlivePort('ctx_' + s);
+                      self.ui.syncContextUi(s, cId);
                     }
-                  }
-                } else if (k.startsWith("sa_ctx_")) {
-                  const item = allData[k];
-                  if (!item || !item.savedAt || Date.now() - item.savedAt > 86400000) {
-                    chrome.storage.local.remove(k);
-                  }
-                } else if (k.startsWith("sa_unlock_")) {
-                  const item = allData[k];
-                  if (!item || !item.unlockedAt || Date.now() - item.unlockedAt > 86400000) {
-                    chrome.storage.local.remove(k);
-                  }
-                } else if (k.startsWith("sa_res_")) {
-                  try {
-                    const obj = (typeof allData[k] === 'string') ? JSON.parse(allData[k]) : allData[k];
-                    if (obj && obj.savedAt && Date.now() - obj.savedAt > 86400000) {
-                      chrome.storage.local.remove(k);
-                    }
-                  } catch {
-                    chrome.storage.local.remove(k);
-                  }
-                } else if (k.startsWith("sa_img_")) {
-                  const imgVal = allData[k];
-                  if (imgVal && typeof imgVal === 'object' && imgVal.savedAt && Date.now() - imgVal.savedAt > 86400000) {
-                    chrome.storage.local.remove(k);
                   }
                 }
               });
@@ -2041,7 +2155,7 @@ try {
             const { customerName, message } = msg;
             self.utils.toast(`⌛ [${customerName || 'Luận Quẻ'}] ${message}`, "info");
           } else if (msg.action === 'AI_QUE_COMPLETED') {
-            const { serial, type, content, customerName, model, triggerSource = 'luan' } = msg;
+            const { serial, conversationId, type, content, customerName, model, triggerSource = 'luan' } = msg;
             self.utils.stopKeepAlivePort(serial);
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
               chrome.storage.local.remove("sa_running_" + serial);
@@ -2083,9 +2197,9 @@ try {
             } else {
               self.utils.toast(`⚠️ [${customerName || serial}] AI quá tải/lỗi! Đã lấy quẻ thô, bấm nút cam để mở Gemini web.`, "warning", 5000);
             }
-            self.ui.syncContextUi(serial, self.utils.getActiveConversationId());
+            self.ui.syncContextUi(serial, conversationId || self.utils.getActiveConversationId());
           } else if (msg.action === 'AI_QUE_FAILED') {
-            const { serial, error, customerName, triggerSource = 'luan' } = msg;
+            const { serial, conversationId, error, customerName, triggerSource = 'luan' } = msg;
             self.utils.stopKeepAlivePort(serial);
             if (typeof chrome !== "undefined" && chrome?.storage?.local) {
               chrome.storage.local.remove("sa_running_" + serial);
@@ -2124,7 +2238,7 @@ try {
             });
 
             self.utils.toast(`❌ [${customerName || serial}] Lỗi luận quẻ: ${error}`, "error", 5000);
-            self.ui.syncContextUi(serial, self.utils.getActiveConversationId());
+            self.ui.syncContextUi(serial, conversationId || self.utils.getActiveConversationId());
           }
         });
       }
@@ -2196,53 +2310,14 @@ try {
         self.aiService.init();
       }
       
-      const scanAll = () => {
-        // 1. Quét Ảnh mới (chỉ quét các ảnh chưa xử lý)
-        document.querySelectorAll("img:not([data-sapo-v1])").forEach(img => {
-          if (self.ui.isTarget(img)) self.ui.inject(img);
-        });
-        // 2. Quét Text mới
-        self.textScan.scan();
-        
-        // 3. Đồng bộ hóa vị trí (Body Injection Sync)
-        self.STATE.activeBadges.forEach((badge, img) => {
-          if (!document.body.contains(img)) { 
-            badge.remove();
-            self.STATE.activeBadges.delete(img);
-          } else {
-            self.ui.sync(img, badge);
-          }
-        });
-
-        // 4. Sync + Cleanup sa-group theo div cha
-        self.STATE.activeTextGroups.forEach((w, div) => {
-          if (!document.body.contains(div)) {
-            if (w._textKey) self.STATE.textKeys.delete(w._textKey);
-            w.remove();
-            self.STATE.activeTextGroups.delete(div);
-          } else {
-            // Sync vị trí: bên phải div, cùng hàng
-            const r = div.getBoundingClientRect();
-            if (r.width === 0 || r.top < -300 || r.top > window.innerHeight + 300) {
-              w.style.opacity = "0"; w.style.pointerEvents = "none";
-            } else {
-              w.style.opacity = "1"; w.style.pointerEvents = "auto";
-              w.style.top  = (window.scrollY + r.top) + "px";
-              w.style.left = (window.scrollX + r.right + 8) + "px";
-            }
-          }
-        });
-      };
-
-      console.log("[SA] Final Version 1.2.0 Ready (throttled).");
-      
-      // Chạy quét và đồng bộ liên tục (Đã bỏ setInterval để tránh lag, chỉ dùng MutationObserver)
-      // setInterval(scanAll, 1500);
-
       // Đồng bộ tức thì khi cuộn hoặc thay đổi kích thước (throttle bằng rAF — max 60fps)
       // FIX LAG SCROLL: Batching DOM Read & Write để chống Layout Thrashing
       const instantSync = () => {
         const reads = [];
+        const winScrollX = window.scrollX;
+        const winScrollY = window.scrollY;
+        const winInnerW = window.innerWidth;
+        const winInnerH = window.innerHeight;
         
         // --- PASS 1: CHỈ ĐỌC DOM (Không thay đổi gì cả) ---
         self.STATE.activeBadges.forEach((badge, img) => {
@@ -2251,8 +2326,9 @@ try {
           reads.push({ 
             el: badge, 
             rect, 
+            width: badge.offsetWidth || 298,
             isImg: true,
-            visible: rect.width !== 0 && rect.top >= 0 && rect.top <= window.innerHeight
+            visible: rect.width !== 0 && rect.top >= 0 && rect.top <= winInnerH
           });
         });
 
@@ -2261,13 +2337,14 @@ try {
           reads.push({ 
             el: w, 
             rect, 
+            width: w.offsetWidth || 355,
             isImg: false,
-            visible: rect.width !== 0 && rect.top >= -300 && rect.top <= window.innerHeight + 300
+            visible: rect.width !== 0 && rect.top >= -300 && rect.top <= winInnerH + 300
           });
         });
 
-        // --- PASS 2: CHỈ GHI DOM (Cập nhật CSS hàng loạt) ---
-        reads.forEach(({ el, rect, isImg, visible }) => {
+        // --- PASS 2: CHỈ GHI DOM (Cập nhật CSS hàng loạt + chống tràn lề phải) ---
+        reads.forEach(({ el, rect, width, isImg, visible }) => {
           if (!visible) {
             el.style.opacity = "0"; 
             el.style.pointerEvents = "none";
@@ -2275,15 +2352,50 @@ try {
             el.style.opacity = "1"; 
             el.style.pointerEvents = "auto";
             el.style.position = "absolute";
-            el.style.top = (window.scrollY + rect.top) + "px";
-            if (isImg) {
-              el.style.left = (window.scrollX + rect.left + rect.width + 8) + "px";
-            } else {
-              el.style.left = (window.scrollX + rect.right + 8) + "px";
-            }
+            el.style.top = (winScrollY + rect.top) + "px";
+            const rawLeft = isImg
+              ? (winScrollX + rect.left + rect.width + 8)
+              : (winScrollX + rect.right + 8);
+            const maxLeft = Math.max(8, winScrollX + winInnerW - width - 12);
+            el.style.left = Math.min(rawLeft, maxLeft) + "px";
           }
         });
       };
+
+      const scanAll = () => {
+        // 1. Quét Ảnh mới (chỉ quét các ảnh chưa xử lý)
+        document.querySelectorAll("img:not([data-sapo-v1])").forEach(img => {
+          if (self.ui.isTarget(img)) self.ui.inject(img);
+        });
+        // 2. Quét Text mới
+        self.textScan.scan();
+        
+        // 3. Dọn dẹp badge của ảnh đã rời DOM
+        self.STATE.activeBadges.forEach((badge, img) => {
+          if (!document.body.contains(img)) { 
+            badge.remove();
+            self.STATE.activeBadges.delete(img);
+          }
+        });
+
+        // 4. Dọn dẹp sa-group của div đã rời DOM
+        self.STATE.activeTextGroups.forEach((w, div) => {
+          if (!document.body.contains(div)) {
+            if (w._textKey) self.STATE.textKeys.delete(w._textKey);
+            w.remove();
+            self.STATE.activeTextGroups.delete(div);
+          }
+        });
+
+        // 5. Đồng bộ tọa độ theo 2 pha (Đọc hết rồi mới Ghi) để tránh Layout Thrashing
+        instantSync();
+      };
+
+      console.log("[SA] Final Version 1.2.0 Ready (throttled).");
+      
+      // Chạy quét và đồng bộ liên tục (Đã bỏ setInterval để tránh lag, chỉ dùng MutationObserver)
+      // setInterval(scanAll, 1500);
+
       let syncScheduled = false;
       const throttledSync = () => {
         if (syncScheduled) return;
@@ -2296,6 +2408,41 @@ try {
       window.addEventListener("scroll", throttledSync, { capture: true, passive: true });
       window.addEventListener("resize", throttledSync, { capture: true, passive: true });
 
+      const EXT_MUTATION_SEL = ".sa-group, .sapo-order-badge-vertical, #sa-toast, .sa-popup-overlay";
+      const isExtNode = (node) => {
+        if (!node) return false;
+        if (node.nodeType === 1) {
+          return !!(node.matches && (node.matches(EXT_MUTATION_SEL) || node.closest(EXT_MUTATION_SEL)));
+        }
+        if (node.nodeType === 3) {
+          return !!(node.parentElement && node.parentElement.closest(EXT_MUTATION_SEL));
+        }
+        return false;
+      };
+      const isOnlyExtensionMutations = (mutations) => {
+        if (!mutations || mutations.length === 0) return false;
+        for (let i = 0; i < mutations.length; i++) {
+          const m = mutations[i];
+          if (isExtNode(m.target)) continue;
+          if (m.type === "childList" && (m.target === document.body || m.target === document.documentElement)) {
+            const added = m.addedNodes;
+            const removed = m.removedNodes;
+            if (added.length + removed.length === 0) return false;
+            let allExt = true;
+            for (let j = 0; j < added.length; j++) {
+              if (!isExtNode(added[j])) { allExt = false; break; }
+            }
+            if (!allExt) return false;
+            for (let j = 0; j < removed.length; j++) {
+              if (!isExtNode(removed[j])) { allExt = false; break; }
+            }
+            if (allExt) continue;
+          }
+          return false;
+        }
+        return true;
+      };
+
       // Theo dõi DOM để quét khi có tin nhắn mới (debounce thực sự 300ms — chờ DOM yên tĩnh mới quét)
       let scanDebounceTimer = null;
       const debouncedScan = () => {
@@ -2305,13 +2452,17 @@ try {
           requestAnimationFrame(() => scanAll());
         }, 300);
       };
+      const onDomMutated = (mutations) => {
+        if (isOnlyExtensionMutations(mutations)) return;
+        debouncedScan();
+      };
       // document_start: body có thể chưa tồn tại → chờ DOM ready
       const startBodyObserver = () => {
         if (document.body) {
-          new MutationObserver(debouncedScan).observe(document.body, { childList: true, subtree: true });
+          new MutationObserver(onDomMutated).observe(document.body, { childList: true, subtree: true });
         } else {
           document.addEventListener('DOMContentLoaded', () => {
-            new MutationObserver(debouncedScan).observe(document.body, { childList: true, subtree: true });
+            new MutationObserver(onDomMutated).observe(document.body, { childList: true, subtree: true });
           });
         }
         

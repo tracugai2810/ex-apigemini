@@ -1,20 +1,22 @@
-/* Sapo Auto v8.0 */
+/* Sapo Auto v8.1 — Refined Dark Slate UI */
 
 /* ===== TOAST ===== */
 .sapo-ao-toast {
-  position: fixed; top: 12px; right: 16px; z-index: 2147483647;
-  max-width: 320px; padding: 10px 16px; border-radius: 12px;
-  color: #fff; font: 600 13px/1.4 system-ui;
-  background: #1e40af;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  position: fixed; top: 14px; right: 16px; z-index: 2147483647;
+  max-width: 340px; padding: 10px 14px; border-radius: 10px;
+  color: #f8fafc; font: 600 12.5px/1.45 system-ui, -apple-system, sans-serif;
+  background: rgba(30, 64, 175, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   animation: sa-in 0.2s ease-out;
 }
 .sapo-ao-toast.info,
-.sapo-ao-toast.warning { background: #1e40af; }
-.sapo-ao-toast.success { background: #166534; }
-.sapo-ao-toast.error   { background: #991b1b; }
+.sapo-ao-toast.warning { background: rgba(30, 58, 138, 0.96); border-color: rgba(96, 165, 250, 0.35); }
+.sapo-ao-toast.success { background: rgba(20, 83, 45, 0.96); border-color: rgba(74, 222, 128, 0.35); }
+.sapo-ao-toast.error   { background: rgba(127, 29, 29, 0.96); border-color: rgba(248, 113, 113, 0.4); }
 @keyframes sa-in {
-  from { opacity: 0; transform: translateY(-10px); }
+  from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -75,13 +77,40 @@
   overflow: visible !important;
 }
 
-/* ===== TEXT SCAN ACTIONS (STABLE LEGACY POISITION) ===== */
+/* ===== TEXT SCAN CARD (COMPACT 3-ROW DARK SLATE) ===== */
+.sa-text-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+  min-width: 368px;
+  max-width: 420px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid #334155;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-sizing: border-box;
+  pointer-events: auto;
+  animation: pop-in 0.18s ease-out;
+}
+
+.sa-text-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
 .sa-text-actions {
   position: relative;
   display: flex !important;
   flex-direction: row !important;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  width: 100%;
+  flex-wrap: nowrap;
   white-space: nowrap;
   pointer-events: auto;
   z-index: 2147483647;
@@ -89,43 +118,56 @@
 
 .sa-text-label {
   display: inline-flex; align-items: center; justify-content: center;
-  padding: 4px 10px; border-radius: 8px;
-  background: #000 !important;
-  color: #fcd34d !important; font: 700 12px/1 'Consolas', monospace;
-  cursor: pointer; white-space: nowrap;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+  padding: 4px 8px; border-radius: 6px;
+  background: #020617 !important;
+  border: 1px solid #334155;
+  color: #fbbf24 !important; font: 700 11.5px/1 'Consolas', monospace;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  transition: border-color 0.15s, background 0.15s;
 }
+.sa-text-label:hover { border-color: #fbbf24; background: #0f172a !important; }
 
 .sa-text-btn {
-  border: none; outline: none; padding: 4px 10px; border-radius: 8px;
-  color: #fff !important; font: 700 12px/1 system-ui;
-  cursor: pointer; transition: all 0.2s;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+  border: none; outline: none; padding: 5px 8px; border-radius: 6px;
+  color: #fff !important; font: 600 11.5px/1.1 system-ui, -apple-system, sans-serif;
+  cursor: pointer; transition: transform 0.15s ease, filter 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
   text-align: center;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.sa-text-btn:hover { transform: scale(1.1); filter: brightness(1.1); }
-.sa-text-btn.btn-img { background: #3b82f6; }
-.sa-text-btn.btn-txt { background: #10b981; }
-.sa-text-btn.btn-txt-only { background: #10b981; }
+.sa-text-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
+.sa-text-btn:active { transform: translateY(0); }
+.sa-text-btn.btn-img { background: #2563eb; }
+.sa-text-btn.btn-txt { background: #059669; }
+.sa-text-btn.btn-txt-only { background: #059669; }
 
-/* Nút con dùng pointer */
+/* Nút con dùng pointer, input chữ dùng text cursor */
 .sapo-order-badge-vertical button,
-.sapo-order-badge-vertical input,
 .sa-group button,
-.sa-group input {
+.sa-group select,
+.sapo-order-badge-vertical select {
   cursor: pointer !important;
+}
+.sa-group input.sa-question-input,
+.sapo-order-badge-vertical input.sa-question-input,
+.sapo-order-badge-vertical input.sa-serial-input {
+  cursor: text !important;
 }
 
 /* ===== DATETIME PICKER (SAPO CHAT) ===== */
 .sa-dt-wrap {
   display: inline-flex !important;
   align-items: center !important;
+  justify-content: space-between !important;
   gap: 3px !important;
   background: #1e293b !important;
   border: 1px solid #334155 !important;
-  border-radius: 5px !important;
+  border-radius: 6px !important;
   padding: 2px 5px !important;
-  flex-shrink: 0 !important;
+  flex: 1 !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
 }
 
 .sa-dt-icon {
@@ -142,7 +184,8 @@
   font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
   padding: 0 !important;
   margin: 0 !important;
-  min-width: 130px !important;
+  flex: 1 !important;
+  min-width: 152px !important;
   width: auto !important;
   height: auto !important;
   cursor: pointer !important;
@@ -254,40 +297,83 @@
 
 .sa-serial-group {
   display: flex;
-  flex-direction: column; /* THÀNH HÀNG DỌC ĐỂ AN TOÀN TUYỆT ĐỐI */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.96);
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: pop-in 0.18s ease-out;
+  width: 308px;
+  box-sizing: border-box;
+}
+
+.sa-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
+.sa-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.sa-card-ai {
+  display: flex;
   align-items: center;
   gap: 6px;
-  background: #0f172a;
-  padding: 8px 6px;
-  border-radius: 8px;
-  border: 1px solid #334155;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
-  animation: pop-in 0.2s ease-out;
-  width: fit-content;
+  width: 100%;
 }
 
 .sa-serial-val {
   color: #fbbf24;
-  font: 800 11px 'Consolas', monospace;
-  margin-bottom: 2px;
+  font: 800 12px 'Consolas', monospace;
   cursor: copy;
+  padding: 2px 6px;
+  background: #020617;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  transition: border-color 0.15s;
 }
+.sa-serial-val:hover { border-color: #fbbf24; }
 
 .sa-mini-btn {
   border: none; outline: none;
-  min-width: 42px; width: auto; padding: 0 6px; height: 26px;
+  min-width: 42px; width: auto; padding: 0 8px; height: 26px;
   border-radius: 6px;
   color: #fff;
-  font: 700 11px system-ui;
+  font: 600 11.5px/1 system-ui, -apple-system, sans-serif;
   cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: transform 0.1s;
+  display: inline-flex; align-items: center; justify-content: center;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease, filter 0.15s ease, opacity 0.15s ease;
 }
-.sa-mini-btn:hover { transform: scale(1.08); }
-.sa-mini-btn.btn-a { background: #2563eb; }
+.sa-mini-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
+.sa-mini-btn:active { transform: translateY(0); }
+.sa-mini-btn.btn-a { background: #2563eb; flex: 0 0 auto; padding: 0 10px; }
+.sa-card-tools .sa-mini-btn.btn-ctx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sa-card-ai .sa-mini-btn { flex: 1; height: 28px; font-weight: 700; }
 .sa-mini-btn.btn-c { background: #059669; }
 .sa-mini-btn.btn-c-only { background: #059669; }
-.sa-mini-btn.btn-x { background: #475569; color: #f1f5f9; height: 20px; font-size: 11px; }
+.sa-mini-btn.btn-x {
+  background: #334155;
+  color: #cbd5e1;
+  border: 1px solid #475569;
+  min-width: auto;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  box-shadow: none;
+}
+.sa-mini-btn.btn-x:hover { background: #475569; color: #fff; filter: none; transform: none; }
 
 /* ===== OCR SCAN BUTTON ===== */
 .sa-scan-btn {
@@ -321,19 +407,20 @@
 .sa-question-input {
   width: 100%;
   box-sizing: border-box;
-  margin-top: 4px;
+  margin-top: 0;
   padding: 6px 8px;
   background: #1e293b;
-  border: 1px solid #3b82f6;
+  border: 1px solid #334155;
   border-radius: 6px;
-  color: #fff;
-  font: 400 12px system-ui;
+  color: #f8fafc;
+  font: 400 12px/1.3 system-ui, -apple-system, sans-serif;
   outline: none;
-  transition: all 0.2s;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 .sa-question-input:focus {
-  background: #0f172a;
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+  background: #020617;
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
 }
 .sa-question-input::placeholder {
   color: #64748b;
@@ -373,6 +460,26 @@
   color: #e2e8f0 !important;
   border: 1px solid #475569 !important;
   white-space: nowrap;
+}
+.sa-text-actions .sa-text-btn.btn-ctx {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sa-mini-btn.btn-reset-hist, .sa-text-btn.btn-reset-hist {
+  background: #1e293b !important;
+  color: #cbd5e1 !important;
+  border: 1px solid #475569 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 24px !important;
+  box-shadow: none !important;
+}
+.sa-mini-btn.btn-reset-hist:hover, .sa-text-btn.btn-reset-hist:hover {
+  background: #334155 !important;
+  border-color: #64748b !important;
 }
 .sa-mini-btn.btn-ctx:hover, .sa-text-btn.btn-ctx:hover {
   background: #475569 !important;

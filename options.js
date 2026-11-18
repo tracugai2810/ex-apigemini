@@ -845,6 +845,21 @@ if (btnDelProfile) {
   });
 }
 
+// === Tab Navigation ===
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const targetId = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      const isTarget = b === btn;
+      b.classList.toggle('active', isTarget);
+      b.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+      panel.classList.toggle('active', panel.id === targetId);
+    });
+  });
+});
+
 // === Init ===
 document.getElementById('btnSave').addEventListener('click', saveSettings);
 document.getElementById('btnReset').addEventListener('click', resetSettings);

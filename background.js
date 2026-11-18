@@ -268,6 +268,18 @@ async function cleanupExpiredLocalStorage(force = false) {
         } else if (v && typeof v === 'object') {
           if (!v.savedAt || (now - v.savedAt > LOCAL_TTL_MS)) keysToRemove.push(k);
         }
+        continue;
+      }
+      if (k.startsWith('sa_serial_img_')) {
+        if (!v) {
+          keysToRemove.push(k);
+        } else if (typeof v === 'string') {
+          keysToStamp[k] = { serial: v, savedAt: now };
+        } else if (typeof v === 'object') {
+          if (!v.savedAt || (now - v.savedAt > LOCAL_TTL_MS)) {
+            keysToRemove.push(k);
+          }
+        }
       }
     }
 
@@ -318,6 +330,10 @@ function bgStopKeepAlive() {
     _bgKeepAliveTimer = null;
   }
 }
+
+// === BỘ KHÓA CHỐNG CHẠY ĐÈ TÁC VỤ TRONG BỘ NHỚ ===
+const _runningAiTasks = new Set();
+const _runningCtxTasks = new Set();
 
 // === BACKGROUND AI QUE SERVICE (CHẠY TRONG SERVICE WORKER ĐỂ KHÔNG BAO GIỜ BỊ NGẮT KHI ĐỔI TAB / F5) ===
 const bgAiService = {
@@ -833,6 +849,7 @@ const bgAiService = {
           broadcastMessage({
             action: 'AI_QUE_COMPLETED',
             serial,
+            conversationId,
             type: 'business',
             content: rewrittenResult,
             customerName,
@@ -855,6 +872,7 @@ const bgAiService = {
           broadcastMessage({
             action: 'AI_QUE_COMPLETED',
             serial,
+            conversationId,
             type: 'claude',
             content: aiResult,
             customerName,
@@ -877,6 +895,7 @@ const bgAiService = {
       broadcastMessage({
         action: 'AI_QUE_COMPLETED',
         serial,
+        conversationId,
         type: 'gemini',
         content: copyText,
         customerName,
@@ -1034,13 +1053,13 @@ const bgContextService = {
     return true;
   },
 
-  async summarizeContext({ apiKey, model, customerName, gender, filteredLines, oldSheetText, hitCap }) {
+  async summarizeContext({ apiKey, model, customerName, gender, filteredLines }) {
     if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key');
     const useModel = model || 'gemini-3.5-flash-lite';
 
     const systemPrompt = [
       'Bạn là trợ lý phân tích và lập hồ sơ khách hàng xem Kinh Dịch Lục Hào.',
-      'Nhiệm vụ: Đọc dữ liệu hội thoại (và hồ sơ cũ nếu có), tổng hợp thành 1 BẢN HỒ SƠ NGỮ CẢNH ĐẦY ĐỦ, CHÍNH XÁC TUYỆT ĐỐI.',
+      'Nhiệm vụ: Đọc dữ liệu hội thoại, tổng hợp thành 1 BẢN HỒ SƠ NGỮ CẢNH ĐẦY ĐỦ, CHÍNH XÁC TUYỆT ĐỐI.',
       '',
       'QUY TẮC BẮT BUỘC:',
       '1. Không bỏ sót bất kỳ thông tin cá nhân (tên, giới tính, tuổi/năm sinh), con số tiền bạc, mốc thời gian, tình tiết câu chuyện, tên quẻ, hào động, dụng thần, kết luận Cát/Hung và Ứng Kỳ nào.',
@@ -1060,9 +1079,6 @@ const bgContextService = {
 
     const genderLabel = gender === 'female' ? 'Nữ' : (gender === 'male' ? 'Nam' : (gender || 'Chưa rõ'));
     let userPrompt = `Khách hàng: ${customerName || 'Khách Hàng'} | Giới tính: ${genderLabel}\n`;
-    if (hitCap && oldSheetText) {
-      userPrompt += `\n[HỒ SƠ ĐÃ LƯU TRƯỚC ĐÓ TRÊN GOOGLE SHEET (cho giai đoạn cũ hơn 500 tin gần nhất)]:\n${oldSheetText}\n`;
-    }
     userPrompt += `\n[LỊCH SỬ HỘI THOẠI TRÊN SAPO (Đã lọc ${filteredLines.length} tin nhắn cốt lõi)]:\n${filteredLines.join('\n')}`;
 
     const payload = {
@@ -1110,26 +1126,17 @@ const bgContextService = {
     };
 
     try {
-      sendStatus('Đang tải tin nhắn Sapo & kiểm tra Sheet...');
+      sendStatus('Đang tải lịch sử tin nhắn Sapo...');
       const settings = await bgAiService.getSettings();
 
-      const [msgOutcome, sheetOutcome] = await Promise.allSettled([
-        this.fetchSapoMessages(convId, sapoToken, tenant),
-        bgAiService.fetchSheet(settings.syncSheetUrl, { action: 'get', convId })
-      ]);
-
-      const sheetExtracted = (sheetOutcome.status === 'fulfilled')
-        ? bgAiService.extractSheetContext(sheetOutcome.value)
-        : { text: '', updatedAt: '', items: [] };
-      const oldSheetText = sheetExtracted.text;
-      const oldUpdatedAt = sheetExtracted.updatedAt;
-
-      if (msgOutcome.status === 'rejected') {
-        const errMsg = msgOutcome.reason?.message || 'Lỗi tải tin nhắn Sapo';
-        console.warn('[SA-BG] Không tải được tin nhắn Sapo, fallback Sheet:', errMsg);
-        const statusType = oldSheetText ? 'fallback' : 'error_no_old';
+      let sapoData;
+      try {
+        sapoData = await this.fetchSapoMessages(convId, sapoToken, tenant);
+      } catch (msgErr) {
+        const errMsg = msgErr?.message || 'Lỗi tải tin nhắn Sapo';
+        console.warn('[SA-BG] Không tải được tin nhắn Sapo:', errMsg);
         await chrome.storage.local.set({
-          [ctxKey]: { type: statusType, content: oldSheetText, time: oldUpdatedAt, error: errMsg, convId, serial, savedAt: Date.now() },
+          [ctxKey]: { type: 'error_no_old', content: '', time: '', error: errMsg, convId, serial, savedAt: Date.now() },
           [unlockKey]: { unlockedAt: Date.now(), convId, serial }
         });
         await chrome.storage.local.remove(runKey);
@@ -1137,20 +1144,20 @@ const bgContextService = {
           action: 'CTX_DONE',
           serial,
           convId,
-          status: statusType,
-          content: oldSheetText,
-          time: oldUpdatedAt,
+          status: 'error_no_old',
+          content: '',
+          time: '',
           error: errMsg,
           customerName
         });
         return;
       }
 
-      const { messages, userMeta, hitCap } = msgOutcome.value;
+      const { messages, userMeta } = sapoData;
       const finalName = customerName || userMeta.name || 'Khách Hàng';
-      const { filteredLines, shopManualTexts } = this.filterMessages(messages);
+      const { filteredLines } = this.filterMessages(messages);
 
-      if (this.isNewCustomer(shopManualTexts, oldSheetText)) {
+      if (filteredLines.length === 0) {
         await chrome.storage.local.set({
           [ctxKey]: { type: 'new_customer', content: '', time: '', convId, serial, savedAt: Date.now() },
           [unlockKey]: { unlockedAt: Date.now(), convId, serial }
@@ -1162,7 +1169,7 @@ const bgContextService = {
           convId,
           status: 'new_customer',
           rawCount: messages.length,
-          filteredCount: filteredLines.length,
+          filteredCount: 0,
           customerName: finalName
         });
         return;
@@ -1177,9 +1184,7 @@ const bgContextService = {
           model: useModel,
           customerName: finalName,
           gender: userMeta.gender,
-          filteredLines,
-          oldSheetText,
-          hitCap
+          filteredLines
         });
 
         sendStatus('Đang lưu hồ sơ lên Google Sheet...');
@@ -1218,10 +1223,9 @@ const bgContextService = {
         });
       } catch (aiErr) {
         const errMsg = aiErr?.message || 'Lỗi AI tổng hợp hồ sơ';
-        console.warn('[SA-BG] Tổng hợp hồ sơ AI lỗi, fallback Sheet:', errMsg);
-        const statusType = oldSheetText ? 'fallback' : 'error_no_old';
+        console.warn('[SA-BG] Tổng hợp hồ sơ AI lỗi:', errMsg);
         await chrome.storage.local.set({
-          [ctxKey]: { type: statusType, content: oldSheetText, time: oldUpdatedAt, error: errMsg, convId, serial, savedAt: Date.now() },
+          [ctxKey]: { type: 'error_no_old', content: '', time: '', error: errMsg, convId, serial, savedAt: Date.now() },
           [unlockKey]: { unlockedAt: Date.now(), convId, serial }
         });
         await chrome.storage.local.remove(runKey);
@@ -1229,9 +1233,9 @@ const bgContextService = {
           action: 'CTX_DONE',
           serial,
           convId,
-          status: statusType,
-          content: oldSheetText,
-          time: oldUpdatedAt,
+          status: 'error_no_old',
+          content: '',
+          time: '',
           error: errMsg,
           customerName: finalName
         });
@@ -1285,6 +1289,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Bắt đầu Luận quẻ trong nền (chạy trong Service Worker)
   if (msg.action === 'startAiQue') {
     const { serial, date, tz = '+07:00', question, customerName, conversationId, triggerSource = 'luan' } = msg;
+    if (_runningAiTasks.has(serial)) {
+      sendResponse({ started: false, alreadyRunning: true });
+      return true;
+    }
+    _runningAiTasks.add(serial);
     cleanupExpiredLocalStorage();
     chrome.storage.local.set({
       ['sa_running_' + serial]: { startTime: Date.now(), customerName: customerName || '', triggerSource, tz }
@@ -1297,11 +1306,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         broadcastMessage({
           action: 'AI_QUE_FAILED',
           serial,
+          conversationId,
           error: err.message || 'Lỗi không xác định',
           customerName,
           triggerSource
         });
-      });
+      })
+      .finally(() => _runningAiTasks.delete(serial));
 
     sendResponse({ started: true });
     return true;
@@ -1310,6 +1321,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Bắt đầu lấy tin nhắn & tổng hợp Hồ sơ ngữ cảnh (nút 📋)
   if (msg.action === 'startContextBuild') {
     const { serial, convId, customerName, sapoToken, tenant } = msg;
+    const ctxTaskKey = `${convId}_${serial}`;
+    if (_runningCtxTasks.has(ctxTaskKey)) {
+      sendResponse({ started: false, alreadyRunning: true });
+      return true;
+    }
+    _runningCtxTasks.add(ctxTaskKey);
     const runKey = `sa_ctx_running_${convId}_${serial}`;
     chrome.storage.local.set({
       [runKey]: { startTime: Date.now(), customerName: customerName || '', convId, serial }
@@ -1330,7 +1347,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           error: err?.message || 'Lỗi không xác định',
           customerName
         });
-      });
+      })
+      .finally(() => _runningCtxTasks.delete(ctxTaskKey));
 
     sendResponse({ started: true });
     return true;

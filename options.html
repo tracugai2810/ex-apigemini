@@ -7,249 +7,268 @@
 </head>
 <body>
   <div class="container">
-    <h1>⚙️ Cài đặt Extension</h1>
+    <header class="page-header">
+      <h1>⚙️ Cài đặt Extension</h1>
+      <p class="page-subtitle">Quản lý Model AI, đồng bộ Google Sheet &amp; cửa sổ làm việc</p>
+    </header>
 
-    <!-- GEMINI -->
-    <section class="card">
-      <h2>🔷 Gemini Popup</h2>
-      <label for="geminiUrl">URL</label>
-      <input type="url" id="geminiUrl" placeholder="https://gemini.google.com/...">
-      <div class="row">
-        <div class="field">
-          <label for="geminiWidth">Rộng (px)</label>
-          <input type="number" id="geminiWidth" min="400" max="2000">
-        </div>
-        <div class="field">
-          <label for="geminiHeight">Cao (px)</label>
-          <input type="number" id="geminiHeight" min="300" max="1500">
-        </div>
-      </div>
-    </section>
+    <nav class="tabs-nav" role="tablist">
+      <button type="button" class="tab-btn active" data-tab="tab-ai" role="tab" aria-selected="true">🤖 AI &amp; Model</button>
+      <button type="button" class="tab-btn" data-tab="tab-sync" role="tab" aria-selected="false">🔗 Đồng bộ &amp; ĐH</button>
+      <button type="button" class="tab-btn" data-tab="tab-popup" role="tab" aria-selected="false">🪟 Cửa sổ Popup</button>
+    </nav>
 
-    <!-- CLAUDE -->
-    <section class="card">
-      <h2>🟠 Claude Popup</h2>
-      <label for="claudeUrl">URL</label>
-      <input type="url" id="claudeUrl" placeholder="https://claude.ai/...">
-      <div class="row">
-        <div class="field">
-          <label for="claudeWidth">Rộng (px)</label>
-          <input type="number" id="claudeWidth" min="400" max="2000">
-        </div>
-        <div class="field">
-          <label for="claudeHeight">Cao (px)</label>
-          <input type="number" id="claudeHeight" min="300" max="1500">
-        </div>
-      </div>
-    </section>
- 
-    <!-- LỤC HÀO WEB -->
-    <section class="card">
-      <h2>🔮 Web Lập Quẻ Lục Hào</h2>
-      <label for="luchaoUrl">URL Trang Web / API</label>
-      <input type="url" id="luchaoUrl" placeholder="https://dshc-luc-hao.vercel.app/">
-    </section>
+    <!-- TAB 1: AI & MODEL -->
+    <div class="tab-panel active" id="tab-ai">
+      <!-- OCR QUÉT SERI & AI -->
+      <section class="card">
+        <h2>🔍 Cấu hình Gemini AI &amp; OCR</h2>
+        <label for="geminiApiKey">Gemini API Key</label>
+        <input type="password" id="geminiApiKey" placeholder="AIza...">
+        <p class="hint">Lấy API key miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a></p>
 
-    <!-- ĐỒNG BỘ NGỮ CẢNH -->
-    <section class="card">
-      <h2>🔄 Đồng bộ Ngữ cảnh Luận giải</h2>
-      <label for="syncSheetUrl">URL Google Apps Script</label>
-      <input type="url" id="syncSheetUrl" placeholder="https://script.google.com/macros/s/.../exec">
-      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Đồng bộ ngữ cảnh luận giải giữa các máy tính qua Google Sheet. <a href="https://sheets.google.com" target="_blank" style="color:#60a5fa;">Tạo Sheet</a></p>
-    </section>
-
-    <!-- TỰ ĐỘNG TẠO ĐƠN & NGÂN HÀNG -->
-    <section class="card">
-      <h2>🏦 Tự động Tạo đơn Sapo & Ngân hàng</h2>
-      <label for="gasBankingUrl">URL Web App Google Apps Script</label>
-      <input type="url" id="gasBankingUrl" placeholder="https://script.google.com/macros/s/.../exec">
-      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Tự động đồng bộ Token và xử lý tạo đơn ngân hàng 24/7 qua Google Sheet Sapo Auto Banking.</p>
-    </section>
-
-    <!-- OCR QUÉT SERI & AI -->
-    <section class="card">
-      <h2>🔍 Cấu hình Gemini AI & OCR</h2>
-      <label for="geminiApiKey">Gemini API Key</label>
-      <input type="password" id="geminiApiKey" placeholder="AIza...">
-      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Lấy API key miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#60a5fa;">Google AI Studio</a></p>
-      <label for="geminiModel" style="margin-top:8px;">Model AI</label>
-      <input type="hidden" id="geminiModel" value="gemini-3.7-flash">
-      <div class="model-dropdown-container" id="modelDropdownContainer">
-        <div class="model-dropdown-toggle" id="modelDropdownToggle">
-          <span id="modelDropdownLabel">🌟 Gemini 3.7 Flash — Mới nhất</span>
-          <span class="model-dropdown-arrow">▾</span>
-        </div>
-        <div class="model-dropdown-list" id="modelDropdownList" style="display:none;">
-          <!-- Danh sách model được render bởi JS -->
-          <div class="model-add-row">
-            <input type="text" id="addCustomModelInput" placeholder="Nhập mã model (VD: gemini-2.0-flash...)">
-            <button type="button" id="btnAddCustomModel" title="Thêm model">➕</button>
+        <label for="geminiModel">Model AI</label>
+        <input type="hidden" id="geminiModel" value="gemini-3.7-flash">
+        <div class="model-dropdown-container" id="modelDropdownContainer">
+          <div class="model-dropdown-toggle" id="modelDropdownToggle">
+            <span id="modelDropdownLabel">🌟 Gemini 3.7 Flash — Mới nhất</span>
+            <span class="model-dropdown-arrow">▾</span>
           </div>
-        </div>
-      </div>
-      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
-    </section>
-
-    <!-- AI VIẾT LẠI (GEMINI & MODEL NGOÀI) -->
-    <section class="card">
-      <h2>✍️ Cấu hình AI Viết Lại (Gemini & Nhà cung cấp khác)</h2>
-      <label for="rewriteGeminiApiKey">Gemini API Key (Tùy chọn)</label>
-      <input type="password" id="rewriteGeminiApiKey" placeholder="Để trống nếu dùng chung API Key ở trên">
-      <p style="color:#94a3b8;font-size:12px;margin-top:4px;">Dùng khi chọn model Gemini. Nếu để trống, tự động dùng chung Gemini API Key ở mục trên.</p>
-      
-      <label for="rewriteGeminiModel" style="margin-top:8px;">Model AI Viết Lại</label>
-      <input type="hidden" id="rewriteGeminiModel" value="gemini-3.5-flash-lite">
-      <div class="model-dropdown-container" id="rewriteModelDropdownContainer">
-        <div class="model-dropdown-toggle" id="rewriteModelDropdownToggle">
-          <span id="rewriteModelDropdownLabel">🏆 Gemini 3.5 Flash Lite — 500 lượt/ngày</span>
-          <span class="model-dropdown-arrow">▾</span>
-        </div>
-        <div class="model-dropdown-list" id="rewriteModelDropdownList" style="display:none;">
-          <!-- Danh sách model được render bởi JS -->
-          <div class="model-add-row">
-            <input type="text" id="addCustomRewriteModelInput" placeholder="Thêm mã Gemini (VD: gemini-2.0-flash...)">
-            <button type="button" id="btnAddCustomRewriteModel" title="Thêm model Gemini">➕</button>
-          </div>
-        </div>
-      </div>
-      <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Model chuyên dụng để viết lại bài luận thành văn phong người thật (đọc prompt từ viet-lai.md).</p>
-
-      <!-- KHỐI THÊM MODEL NGOÀI (OpenAI-Compatible: RadoxAI, Claude, DeepSeek...) -->
-      <div style="margin-top:12px;padding:12px;background:#0f172a;border-radius:8px;border:1px dashed #334155;">
-        <div style="font-size:12px;font-weight:600;color:#64ffda;margin-bottom:8px;">
-          ➕ Thêm Model Ngoài (RadoxAI, Claude, OpenAI, DeepSeek...)
-        </div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          <div>
-            <label for="addExtRewriteBaseUrl" style="margin:0 0 4px 0;font-size:11px;">Base URL</label>
-            <input type="text" id="addExtRewriteBaseUrl" placeholder="https://radoxai.com/v1 hoặc https://openrouter.ai/api/v1" style="font-size:12px;padding:7px 10px;">
-          </div>
-          <div class="row" style="gap:8px;">
-            <div class="field">
-              <label for="addExtRewriteApiKey" style="margin:0 0 4px 0;font-size:11px;">API Key</label>
-              <input type="password" id="addExtRewriteApiKey" placeholder="API Key của bên cung cấp" style="font-size:12px;padding:7px 10px;">
-            </div>
-            <div class="field">
-              <label for="addExtRewriteModel" style="margin:0 0 4px 0;font-size:11px;">Mã Model</label>
-              <input type="text" id="addExtRewriteModel" placeholder="claude-sonnet-5" style="font-size:12px;padding:7px 10px;">
+          <div class="model-dropdown-list" id="modelDropdownList" style="display:none;">
+            <!-- Danh sách model được render bởi JS -->
+            <div class="model-add-row">
+              <input type="text" id="addCustomModelInput" placeholder="Nhập mã model (VD: gemini-2.0-flash...)">
+              <button type="button" id="btnAddCustomModel" title="Thêm model">➕</button>
             </div>
           </div>
-          <div style="display:flex;justify-content:flex-end;margin-top:4px;">
-            <button type="button" id="btnAddExtRewriteModel" style="padding:6px 14px;background:#0f4c75;color:#64ffda;border:1px solid #1b6ca8;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">➕ Thêm vào danh sách</button>
+        </div>
+        <p class="hint hint-sm">Chỉ chạy đúng model đã chọn (tự động đổi API Key dự phòng nếu có)</p>
+      </section>
+
+      <!-- MODEL PHỤ (OpenAI-Compatible) DÀNH CHO NÚT "KHÁC" -->
+      <section class="card">
+        <h2>🔵 Model Phụ (Z.AI, OpenRouter, DeepSeek...) — Nút "Khác"</h2>
+
+        <label for="customProfileSelect">Cấu hình đang dùng (Bộ URL + Key + Model)</label>
+        <div class="select-row">
+          <select id="customProfileSelect" class="select-input">
+            <!-- Tự động nạp danh sách cấu hình đã lưu -->
+          </select>
+          <button type="button" id="btnDeleteProfile" class="btn-inline-danger" title="Xóa cấu hình đang chọn">🗑️</button>
+        </div>
+
+        <label for="customAiBaseUrl">Base URL</label>
+        <input type="text" id="customAiBaseUrl" placeholder="https://api.z.ai/api/paas/v4 hoặc https://openrouter.ai/api/v1">
+
+        <label for="customAiApiKey">API Key</label>
+        <input type="password" id="customAiApiKey" placeholder="API Key của provider tương ứng">
+
+        <label for="customAiModel">Tên Model</label>
+        <input type="text" id="customAiModel" placeholder="glm-4.7-flash hoặc z-ai/glm-5.2:free">
+
+        <div class="card-actions-end">
+          <button type="button" id="btnSaveAsNewProfile" class="btn-inline-primary">➕ Lưu thành Cấu hình Mới</button>
+        </div>
+
+        <p class="hint hint-sm">Chuẩn OpenAI-Compatible. Hỗ trợ mọi nhà cung cấp như Z.AI (GLM), OpenRouter, DeepSeek... Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
+      </section>
+
+      <!-- AI VIẾT LẠI (GEMINI & MODEL NGOÀI) -->
+      <section class="card">
+        <h2>✍️ Cấu hình AI Viết Lại (Gemini &amp; Nhà cung cấp khác)</h2>
+        <label for="rewriteGeminiApiKey">Gemini API Key (Tùy chọn)</label>
+        <input type="password" id="rewriteGeminiApiKey" placeholder="Để trống nếu dùng chung API Key ở trên">
+        <p class="hint">Dùng khi chọn model Gemini. Nếu để trống, tự động dùng chung Gemini API Key ở mục trên.</p>
+
+        <label for="rewriteGeminiModel">Model AI Viết Lại</label>
+        <input type="hidden" id="rewriteGeminiModel" value="gemini-3.5-flash-lite">
+        <div class="model-dropdown-container" id="rewriteModelDropdownContainer">
+          <div class="model-dropdown-toggle" id="rewriteModelDropdownToggle">
+            <span id="rewriteModelDropdownLabel">🏆 Gemini 3.5 Flash Lite — 500 lượt/ngày</span>
+            <span class="model-dropdown-arrow">▾</span>
+          </div>
+          <div class="model-dropdown-list" id="rewriteModelDropdownList" style="display:none;">
+            <!-- Danh sách model được render bởi JS -->
+            <div class="model-add-row">
+              <input type="text" id="addCustomRewriteModelInput" placeholder="Thêm mã Gemini (VD: gemini-2.0-flash...)">
+              <button type="button" id="btnAddCustomRewriteModel" title="Thêm model Gemini">➕</button>
+            </div>
           </div>
         </div>
-      </div>
+        <p class="hint hint-sm">Model chuyên dụng để viết lại bài luận thành văn phong người thật (đọc prompt từ viet-lai.md).</p>
 
-      <div class="row" style="margin-top:12px;">
-        <div class="field">
-          <label for="rewriteTemperature">Độ bay bổng (Temperature)</label>
-          <input type="number" id="rewriteTemperature" step="0.05" min="0" max="2" placeholder="0.6">
-          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Áp dụng cho cả Gemini & Model ngoài (Để trống = Mặc định).</p>
+        <!-- KHỐI THÊM MODEL NGOÀI (OpenAI-Compatible: RadoxAI, Claude, DeepSeek...) -->
+        <div class="sub-box sub-box-dashed">
+          <div class="sub-box-title">
+            ➕ Thêm Model Ngoài (RadoxAI, Claude, OpenAI, DeepSeek...)
+          </div>
+          <div class="sub-box-stack">
+            <div>
+              <label for="addExtRewriteBaseUrl" class="label-compact">Base URL</label>
+              <input type="text" id="addExtRewriteBaseUrl" class="input-compact" placeholder="https://radoxai.com/v1 hoặc https://openrouter.ai/api/v1">
+            </div>
+            <div class="row row-compact">
+              <div class="field">
+                <label for="addExtRewriteApiKey" class="label-compact">API Key</label>
+                <input type="password" id="addExtRewriteApiKey" class="input-compact" placeholder="API Key của bên cung cấp">
+              </div>
+              <div class="field">
+                <label for="addExtRewriteModel" class="label-compact">Mã Model</label>
+                <input type="text" id="addExtRewriteModel" class="input-compact" placeholder="claude-sonnet-5">
+              </div>
+            </div>
+            <div class="card-actions-end">
+              <button type="button" id="btnAddExtRewriteModel" class="btn-inline-primary">➕ Thêm vào danh sách</button>
+            </div>
+          </div>
         </div>
-        <div class="field">
-          <label for="rewriteTopP">Bộ lọc chuẩn xác (Top P)</label>
-          <input type="number" id="rewriteTopP" step="0.05" min="0" max="1" placeholder="0.8">
-          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">Áp dụng cho cả Gemini & Model ngoài (Để trống = Mặc định).</p>
+
+        <div class="row row-spaced">
+          <div class="field">
+            <label for="rewriteTemperature">Độ bay bổng (Temperature)</label>
+            <input type="number" id="rewriteTemperature" step="0.05" min="0" max="2" placeholder="0.6">
+            <p class="hint hint-sm">Áp dụng cho cả Gemini &amp; Model ngoài (Để trống = Mặc định).</p>
+          </div>
+          <div class="field">
+            <label for="rewriteTopP">Bộ lọc chuẩn xác (Top P)</label>
+            <input type="number" id="rewriteTopP" step="0.05" min="0" max="1" placeholder="0.8">
+            <p class="hint hint-sm">Áp dụng cho cả Gemini &amp; Model ngoài (Để trống = Mặc định).</p>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- MODEL PHỤ (OpenAI-Compatible) DÀNH CHO NÚT "KHÁC" -->
-    <section class="card">
-      <h2>🔵 Model Phụ (Z.AI, OpenRouter, DeepSeek...) — Nút "Khác"</h2>
-      
-      <label for="customProfileSelect">Cấu hình đang dùng (Bộ URL + Key + Model)</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <select id="customProfileSelect" style="flex:1;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;">
-          <!-- Tự động nạp danh sách cấu hình đã lưu -->
-        </select>
-        <button type="button" id="btnDeleteProfile" title="Xóa cấu hình đang chọn" style="padding:8px 12px;background:#2d1a24;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;cursor:pointer;font-size:13px;">🗑️</button>
-      </div>
-
-      <label for="customAiBaseUrl" style="margin-top:10px;">Base URL</label>
-      <input type="text" id="customAiBaseUrl" placeholder="https://api.z.ai/api/paas/v4 hoặc https://openrouter.ai/api/v1" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
-
-      <label for="customAiApiKey" style="margin-top:8px;">API Key</label>
-      <input type="password" id="customAiApiKey" placeholder="API Key của provider tương ứng">
-
-      <label for="customAiModel" style="margin-top:8px;">Tên Model</label>
-      <input type="text" id="customAiModel" placeholder="glm-4.7-flash hoặc z-ai/glm-5.2:free" style="width:100%;padding:8px;border-radius:8px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;font-size:13px;box-sizing:border-box;">
-
-      <div style="margin-top:10px;display:flex;justify-content:flex-end;">
-        <button type="button" id="btnSaveAsNewProfile" style="padding:8px 14px;background:#0f4c75;color:#64ffda;border:1px solid #1b6ca8;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;">➕ Lưu thành Cấu hình Mới</button>
-      </div>
-
-      <p style="color:#94a3b8;font-size:11px;margin-top:8px;">Chuẩn OpenAI-Compatible. Hỗ trợ mọi nhà cung cấp như Z.AI (GLM), OpenRouter, DeepSeek... Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
-    </section>
-
-    <!-- TINH CHỈNH ĐỘ BAY BỔNG & LOGIC -->
-    <section class="card">
-      <h2>🌡️ Tinh chỉnh Độ bay bổng & Logic (Cả 2 Nút)</h2>
-      <div class="row">
-        <div class="field">
-          <label for="aiTemperature">Độ bay bổng (Temperature)</label>
-          <input type="number" id="aiTemperature" step="0.05" min="0" max="2" placeholder="0.3">
-          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">
-            <b>0.1 – 0.3:</b> Chuẩn logic, kỷ luật.<br>
-            <b>0.4 – 0.6:</b> Cân bằng, luận tượng hay.<br>
-            <b>0.7+:</b> Bay bổng cao. (Để trống = Mặc định)
-          </p>
+      <!-- TINH CHỈNH ĐỘ BAY BỔNG & LOGIC -->
+      <section class="card">
+        <h2>🌡️ Tinh chỉnh Độ bay bổng &amp; Logic (Cả 2 Nút)</h2>
+        <div class="row">
+          <div class="field">
+            <label for="aiTemperature">Độ bay bổng (Temperature)</label>
+            <input type="number" id="aiTemperature" step="0.05" min="0" max="2" placeholder="0.3">
+            <p class="hint hint-sm">
+              <b>0.1 – 0.3:</b> Chuẩn logic, kỷ luật.<br>
+              <b>0.4 – 0.6:</b> Cân bằng, luận tượng hay.<br>
+              <b>0.7+:</b> Bay bổng cao. (Để trống = Mặc định)
+            </p>
+          </div>
+          <div class="field">
+            <label for="aiTopP">Bộ lọc chuẩn xác (Top P)</label>
+            <input type="number" id="aiTopP" step="0.05" min="0" max="1" placeholder="0.85">
+            <p class="hint hint-sm">
+              Lọc bỏ từ ngữ vô lý, giữ câu chữ gãy gọn. (Để trống = Mặc định, đề xuất: 0.85 – 0.95)
+            </p>
+          </div>
         </div>
-        <div class="field">
-          <label for="aiTopP">Bộ lọc chuẩn xác (Top P)</label>
-          <input type="number" id="aiTopP" step="0.05" min="0" max="1" placeholder="0.85">
-          <p style="color:#94a3b8;font-size:11px;margin-top:4px;">
-            Lọc bỏ từ ngữ vô lý, giữ câu chữ gãy gọn. (Để trống = Mặc định, đề xuất: 0.85 – 0.95)
-          </p>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- CẤU HÌNH 2 NÚT LUẬN QUẺ SONG SONG -->
-    <section class="card">
-      <h2>🎯 Hoạt Động Của 2 Nút Luận Quẻ Song Song</h2>
+      <!-- CẤU HÌNH 2 NÚT LUẬN QUẺ SONG SONG -->
+      <section class="card">
+        <h2>🎯 Hoạt Động Của 2 Nút Luận Quẻ Song Song</h2>
 
-      <!-- NÚT GEMINI -->
-      <div style="margin-bottom:12px;padding:10px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#d97706;color:white;font-weight:700;font-size:12px;">NÚT GEMINI</span>
-          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">🔍 Gemini AI (Cố định)</span>
+        <div class="info-tile">
+          <div class="info-tile-head">
+            <span class="role-badge role-badge-gemini">NÚT GEMINI</span>
+            <span class="info-tile-title">🔍 Gemini AI (Cố định)</span>
+          </div>
+          <p class="hint hint-sm">Luôn dùng API &amp; Model ở mục <b>Gemini AI</b> để luận quẻ.</p>
         </div>
-        <p style="color:#94a3b8;font-size:11px;margin-top:4px;margin-bottom:0;">Luôn dùng API & Model ở mục <b>Gemini AI</b> để luận quẻ (kèm cơ chế tự động đổi API dự phòng & fallback model).</p>
-      </div>
 
-      <!-- NÚT KHÁC -->
-      <div style="padding:10px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-          <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#16a34a;color:white;font-weight:700;font-size:12px;">NÚT KHÁC</span>
-          <span style="color:#e2e8f0;font-weight:600;font-size:13px;">🤖 Model Phụ (Z.AI / OpenRouter / DeepSeek...)</span>
+        <div class="info-tile info-tile-last">
+          <div class="info-tile-head">
+            <span class="role-badge role-badge-other">NÚT KHÁC</span>
+            <span class="info-tile-title">🤖 Model Phụ (Z.AI / OpenRouter / DeepSeek...)</span>
+          </div>
+          <p class="hint hint-sm">Bấm nút "Khác" sẽ gọi cấu hình đang chọn ở mục <b>Model Phụ</b>, tự động kế thừa ngữ cảnh Google Sheet.</p>
         </div>
-        <p style="color:#94a3b8;font-size:11px;margin-top:2px;margin-bottom:0;">Bấm nút "Khác" sẽ gọi cấu hình đang chọn ở mục <b>Model Phụ</b>, tự động kế thừa và lưu nối tiếp ngữ cảnh Google Sheet.</p>
-      </div>
-    </section>
-
-    <!-- BUSINESS -->
-    <section class="card">
-      <h2>🟩 Business Popup</h2>
-      <div class="row">
-        <div class="field">
-          <label for="businessWidth">Rộng (px)</label>
-          <input type="number" id="businessWidth" min="400" max="2000">
-        </div>
-        <div class="field">
-          <label for="businessHeight">Cao (px)</label>
-          <input type="number" id="businessHeight" min="300" max="1500">
-        </div>
-      </div>
-    </section>
-
-    <!-- BUTTONS -->
-    <div class="actions">
-      <button id="btnSave" class="btn-save">💾 Lưu</button>
-      <button id="btnReset" class="btn-reset">↩ Mặc định</button>
+      </section>
     </div>
-    <div id="status" class="status"></div>
+
+    <!-- TAB 2: ĐỒNG BỘ & ĐƠN HÀNG -->
+    <div class="tab-panel" id="tab-sync">
+      <!-- ĐỒNG BỘ NGỮ CẢNH -->
+      <section class="card">
+        <h2>🔄 Đồng bộ Ngữ cảnh Luận giải</h2>
+        <label for="syncSheetUrl">URL Google Apps Script</label>
+        <input type="url" id="syncSheetUrl" placeholder="https://script.google.com/macros/s/.../exec">
+        <p class="hint">Đồng bộ hồ sơ ngữ cảnh giữa các máy tính qua Google Sheet. <a href="https://sheets.google.com" target="_blank">Tạo Sheet</a></p>
+      </section>
+
+      <!-- TỰ ĐỘNG TẠO ĐƠN & NGÂN HÀNG -->
+      <section class="card">
+        <h2>🏦 Tự động Tạo đơn Sapo &amp; Ngân hàng</h2>
+        <label for="gasBankingUrl">URL Web App Google Apps Script</label>
+        <input type="url" id="gasBankingUrl" placeholder="https://script.google.com/macros/s/.../exec">
+        <p class="hint">Tự động đồng bộ Token và xử lý tạo đơn ngân hàng 24/7 qua Google Sheet Sapo Auto Banking.</p>
+      </section>
+
+      <!-- LỤC HÀO WEB -->
+      <section class="card">
+        <h2>🔮 Web Lập Quẻ Lục Hào</h2>
+        <label for="luchaoUrl">URL Trang Web / API</label>
+        <input type="url" id="luchaoUrl" placeholder="https://dshc-luc-hao.vercel.app/">
+      </section>
+    </div>
+
+    <!-- TAB 3: CỬA SỔ POPUP -->
+    <div class="tab-panel" id="tab-popup">
+      <!-- GEMINI -->
+      <section class="card">
+        <h2>🔷 Gemini Popup</h2>
+        <label for="geminiUrl">URL</label>
+        <input type="url" id="geminiUrl" placeholder="https://gemini.google.com/...">
+        <div class="row">
+          <div class="field">
+            <label for="geminiWidth">Rộng (px)</label>
+            <input type="number" id="geminiWidth" min="400" max="2000">
+          </div>
+          <div class="field">
+            <label for="geminiHeight">Cao (px)</label>
+            <input type="number" id="geminiHeight" min="300" max="1500">
+          </div>
+        </div>
+      </section>
+
+      <!-- CLAUDE -->
+      <section class="card">
+        <h2>🟠 Claude Popup</h2>
+        <label for="claudeUrl">URL</label>
+        <input type="url" id="claudeUrl" placeholder="https://claude.ai/...">
+        <div class="row">
+          <div class="field">
+            <label for="claudeWidth">Rộng (px)</label>
+            <input type="number" id="claudeWidth" min="400" max="2000">
+          </div>
+          <div class="field">
+            <label for="claudeHeight">Cao (px)</label>
+            <input type="number" id="claudeHeight" min="300" max="1500">
+          </div>
+        </div>
+      </section>
+
+      <!-- BUSINESS -->
+      <section class="card">
+        <h2>🟩 Business Popup</h2>
+        <div class="row">
+          <div class="field">
+            <label for="businessWidth">Rộng (px)</label>
+            <input type="number" id="businessWidth" min="400" max="2000">
+          </div>
+          <div class="field">
+            <label for="businessHeight">Cao (px)</label>
+            <input type="number" id="businessHeight" min="300" max="1500">
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
+
+  <!-- STICKY FOOTER -->
+  <footer class="sticky-footer">
+    <div id="status" class="status"></div>
+    <div class="actions">
+      <button type="button" id="btnSave" class="btn-save">💾 Lưu cài đặt</button>
+      <button type="button" id="btnReset" class="btn-reset">↩ Mặc định</button>
+    </div>
+  </footer>
 
   <script src="options.js"></script>
 </body>
