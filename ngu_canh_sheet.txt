@@ -328,7 +328,8 @@ function doPost(e) {
         mobileReadProfile: function(a) { return mobileReadProfile(a[0]); },
         mobileClearContext: function(a) { return mobileClearContext(a[0]); },
         mobileRunDivination: function(a) { return mobileRunDivination(a[0]); },
-        mobileClearResultCache: function(a) { return mobileClearResultCache(a[0], a[1], a[2]); }
+        mobileClearResultCache: function(a) { return mobileClearResultCache(a[0], a[1], a[2]); },
+        mobileSaveDraft: function(a) { return mobileSaveDraft(a[0], a[1]); }
       };
       if (!rpcMap[fnName]) {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown RPC function: " + fnName })).setMimeType(ContentService.MimeType.JSON);
@@ -435,6 +436,15 @@ function saveMobileCustomer_(custObj) {
   }
   if (copy.ctxError && String(copy.ctxError).length > 300) {
     copy.ctxError = String(copy.ctxError).slice(0, 300);
+  }
+  if (copy.draft && typeof copy.draft === 'object') {
+    copy.draft = {
+      serial: String(copy.draft.serial || '').slice(0, 50),
+      question: String(copy.draft.question || '').slice(0, 4000),
+      dtVal: String(copy.draft.dtVal || '').slice(0, 30),
+      tz: String(copy.draft.tz || '').slice(0, 16),
+      savedAt: Number(copy.draft.savedAt || Date.now())
+    };
   }
   store.setProperty(MOB_PROP_KEYS.CUST_PREFIX + copy.convId, JSON.stringify(copy));
 }
@@ -1443,6 +1453,25 @@ function mobileClearResultCache(convId, triggerSource, serial) {
   return { success: true };
 }
 
+function mobileSaveDraft(convId, draftPatch) {
+  const cid = String(convId || '').trim();
+  if (!cid || cid === 'default') return { success: false };
+  const cust = getMobileCustomer_(cid);
+  if (!cust) return { success: false };
+
+  const prev = (cust.draft && typeof cust.draft === 'object') ? cust.draft : {};
+  const src = (draftPatch && typeof draftPatch === 'object') ? draftPatch : {};
+  cust.draft = {
+    serial: (src.serial !== undefined) ? String(src.serial || '').slice(0, 50) : String(prev.serial || '').slice(0, 50),
+    question: (src.question !== undefined) ? String(src.question || '').slice(0, 4000) : String(prev.question || '').slice(0, 4000),
+    dtVal: (src.dtVal !== undefined) ? String(src.dtVal || '').slice(0, 30) : String(prev.dtVal || '').slice(0, 30),
+    tz: (src.tz !== undefined) ? String(src.tz || '').slice(0, 16) : String(prev.tz || '').slice(0, 16),
+    savedAt: Number(src.savedAt || Date.now())
+  };
+  saveMobileCustomer_(cust);
+  return { success: true, draft: cust.draft };
+}
+
 // ===================================================================
 // 8. GIAO DIỆN WEB MOBILE (Dark Slate Mobile-First, Bố cục 4 Tầng)
 // ===================================================================
@@ -1984,6 +2013,8 @@ function getMobileWebHtml_(initialStateJson) {
 '      hasSapoToken: false,',
 '      ctxResetting: {},',
 '      runningMap: {},',
+'      draftTimers: {},',
+'      dirtyDraftConv: {},',
 '      pollTimer: null,',
 '      pendingCopyClear: null,',
 '      toastTimer: null',
@@ -2069,12 +2100,36 @@ function getMobileWebHtml_(initialStateJson) {
 '      return {};',
 '    }',
 '',
-'    function saveDraft(convId, patch) {',
+'    function scheduleServerDraftSave(convId, immediate) {',
+'      if (!convId) return;',
+'      state.dirtyDraftConv[convId] = true;',
+'      if (state.draftTimers[convId]) {',
+'        clearTimeout(state.draftTimers[convId]);',
+'        state.draftTimers[convId] = null;',
+'      }',
+'      var runSave = function() {',
+'        var payload = getDraft(convId);',
+'        runGas("mobileSaveDraft", convId, payload).then(function() {',
+'          var latest = getDraft(convId);',
+'          if (!latest.savedAt || !payload.savedAt || Number(latest.savedAt) <= Number(payload.savedAt)) {',
+'            delete state.dirtyDraftConv[convId];',
+'          }',
+'        }).catch(function() {});',
+'      };',
+'      if (immediate) {',
+'        runSave();',
+'      } else {',
+'        state.draftTimers[convId] = setTimeout(runSave, 900);',
+'      }',
+'    }',
+'',
+'    function saveDraft(convId, patch, immediate) {',
 '      if (!convId) return;',
 '      var cur = getDraft(convId);',
 '      Object.keys(patch).forEach(function(k) { cur[k] = patch[k]; });',
 '      cur.savedAt = Date.now();',
 '      try { localStorage.setItem("sa_mob_draft_" + convId, JSON.stringify(cur)); } catch (e) {}',
+'      scheduleServerDraftSave(convId, !!immediate);',
 '    }',
 '',
 '    function getResKey(convId, triggerSource, serial) {',
@@ -2238,6 +2293,14 @@ function getMobileWebHtml_(initialStateJson) {
 '      state.customers.forEach(function(c) {',
 '        validIds[c.convId] = true;',
 '        if (c.ctxStatus === "running") hasBusy = true;',
+'        if (c.draft && !state.dirtyDraftConv[c.convId]) {',
+'          var localDr = getDraft(c.convId);',
+'          var srvTs = Number(c.draft.savedAt || 0);',
+'          var locTs = Number(localDr && localDr.savedAt || 0);',
+'          if (!locTs || srvTs > locTs + 5000) {',
+'            try { localStorage.setItem("sa_mob_draft_" + c.convId, JSON.stringify(c.draft)); } catch (eDr) {}',
+'          }',
+'        }',
 '        if (c.cachedResults) {',
 '          Object.keys(c.cachedResults).forEach(function(rk) {',
 '            var r = c.cachedResults[rk];',
@@ -2271,6 +2334,10 @@ function getMobileWebHtml_(initialStateJson) {
 '            var matched = false;',
 '            Object.keys(validIds).forEach(function(vcid) { if (k.indexOf("sa_mob_res_" + vcid + "_") === 0) matched = true; });',
 '            if (!matched) localStorage.removeItem(k);',
+'          } else if (k.indexOf("sa_mob_run_") === 0) {',
+'            var matchedRun = false;',
+'            Object.keys(validIds).forEach(function(vcid) { if (k.indexOf("sa_mob_run_" + vcid + "_") === 0) matchedRun = true; });',
+'            if (!matchedRun) localStorage.removeItem(k);',
 '          }',
 '        });',
 '      } catch (eClean) {}',
@@ -2557,6 +2624,7 @@ function getMobileWebHtml_(initialStateJson) {
 '      var question = ($("questionInput").value || "").trim();',
 '      var dateObj = parseDatetimeValue($("dtInput").value);',
 '      var tz = $("tzSelect").value || "+07:00";',
+'      if (state.dirtyDraftConv[convId]) scheduleServerDraftSave(convId, true);',
 '',
 '      setActiveRun(convId, serial, {',
 '        startTime: Date.now(),',
@@ -2803,26 +2871,34 @@ function getMobileWebHtml_(initialStateJson) {
 '      saveDraft(cust.convId, { serial: val });',
 '      syncContextAndAiButtons(cust);',
 '    };',
+'    $("serialInput").onblur = function() {',
+'      var cust = getActiveCustomer();',
+'      if (cust && state.dirtyDraftConv[cust.convId]) scheduleServerDraftSave(cust.convId, true);',
+'    };',
 '    $("btnClearSerial").onclick = function() {',
 '      var cust = getActiveCustomer();',
 '      $("serialInput").value = "";',
 '      if (cust) {',
-'        saveDraft(cust.convId, { serial: "" });',
+'        saveDraft(cust.convId, { serial: "" }, true);',
 '        renderCustomerWorkspace(cust, true);',
 '      }',
 '      $("serialInput").focus();',
 '    };',
 '    $("dtInput").onchange = function() {',
 '      var cust = getActiveCustomer();',
-'      if (cust) saveDraft(cust.convId, { dtVal: $("dtInput").value });',
+'      if (cust) saveDraft(cust.convId, { dtVal: $("dtInput").value }, true);',
 '    };',
 '    $("tzSelect").onchange = function() {',
 '      var cust = getActiveCustomer();',
-'      if (cust) saveDraft(cust.convId, { tz: $("tzSelect").value });',
+'      if (cust) saveDraft(cust.convId, { tz: $("tzSelect").value }, true);',
 '    };',
 '    $("questionInput").oninput = function() {',
 '      var cust = getActiveCustomer();',
 '      if (cust) saveDraft(cust.convId, { question: $("questionInput").value });',
+'    };',
+'    $("questionInput").onblur = function() {',
+'      var cust = getActiveCustomer();',
+'      if (cust && state.dirtyDraftConv[cust.convId]) scheduleServerDraftSave(cust.convId, true);',
 '    };',
 '',
 '    // Settings Modal',
@@ -2927,9 +3003,20 @@ function getMobileWebHtml_(initialStateJson) {
 '      });',
 '    };',
 '',
-'    $("btnRefresh").onclick = function() { refreshState(false, true); };',
+'    $("btnRefresh").onclick = function() {',
+'      Object.keys(state.dirtyDraftConv).forEach(function(cid) {',
+'        if (state.dirtyDraftConv[cid]) scheduleServerDraftSave(cid, true);',
+'      });',
+'      refreshState(false, true);',
+'    };',
 '    document.addEventListener("visibilitychange", function() {',
-'      if (!document.hidden) refreshState(false);',
+'      if (document.hidden) {',
+'        Object.keys(state.dirtyDraftConv).forEach(function(cid) {',
+'          if (state.dirtyDraftConv[cid]) scheduleServerDraftSave(cid, true);',
+'        });',
+'      } else {',
+'        refreshState(false);',
+'      }',
 '    });',
 '',
 '    // Init',
