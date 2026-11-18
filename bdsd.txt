@@ -40,6 +40,8 @@ const CONFIG = {
   locationId: 885876,
   tagIdBangGia: "696219a92feb720001b8e624", // Tag "Gửi bảng giá"
   tagIdDaThanhToan: "6a87fe78314f04000121a29c", // Tag "Đã thanh toán" màu vàng
+  tagIdMobile: "6afd6aa32d0deb00017f188e", // Tag "Mobile" màu tím
+  contextWebAppUrl: "https://script.google.com/macros/s/AKfycbzDk2MwmRuYkdKxWndwRFa0caD7apL6k6gLW71pfQbtGQipFz6yiar3xFXhDuZq_PIAvQ/exec", // Link Web App /exec của ex-ngucanhquedich
 
   // Danh mục sản phẩm tạo đơn Sapo
   products: {
@@ -54,8 +56,13 @@ const STORE_KEYS = {
   lastDigest: "LAST_DIGEST_VP",
   lastTopEntryKey: "LAST_TOP_ENTRY_KEY_VP",
   balance: "CURRENT_BALANCE",
-  sapoToken: "SAPO_TOKEN"
+  sapoToken: "SAPO_TOKEN",
+  contextWebAppUrl: "CONTEXT_WEBAPP_URL",
+  mobileTaggedMap: "MOBILE_TAGGED_MAP",
+  mobileSyncPending: "MOBILE_SYNC_PENDING"
 };
+
+var _latestMobileScanResult = null;
 
 // ============================================
 // 2. KHỞI TẠO BẢNG TÍNH GOOGLE SHEET
@@ -109,6 +116,7 @@ function checkFundNow() {
   try {
     const store = PropertiesService.getScriptProperties();
     const timeNow = new Date().toLocaleString("vi-VN");
+    _latestMobileScanResult = null;
     Logger.log("=== 🚀 BẮT ĐẦU CHU KỲ QUÉT [" + timeNow + "] ===");
 
     // BƯỚC 1: Quét hội thoại Sapo Mobile TRƯỚC để nạp khách mới vào Sheet
@@ -129,6 +137,13 @@ function checkFundNow() {
       }
     } catch (eVP) {
       Logger.log("❌ Lỗi VPBank: " + eVP.message);
+    }
+
+    // BƯỚC 3: Đẩy đồng bộ hội thoại gắn nhãn "Mobile" sang ex-ngucanhquedich (chạy sau cùng để không ảnh hưởng VPBank & Tạo đơn)
+    try {
+      flushMobileTaggedSync_();
+    } catch (eMob) {
+      Logger.log("⚠️ Lỗi đồng bộ nhãn Mobile: " + eMob.message);
     }
 
     Logger.log("=== ✅ HOÀN THÀNH CHU KỲ QUÉT ===");
@@ -535,12 +550,12 @@ function createSapoOrder_(params) {
   let data1 = {};
   try { data1 = JSON.parse(res1.getContentText()); } catch(e) {}
 
-  const checkoutToken = data1.checkout?.token || data1?.token;
+  const checkoutToken = (data1.checkout && data1.checkout.token) || (data1 && data1.token);
   if (!checkoutToken) {
     return { success: false, error: "Step 1 HTTP " + res1.getResponseCode() + ": " + res1.getContentText().substring(0, 200) };
   }
 
-  const s1CustomerId = data1.checkout?.customer_id;
+  const s1CustomerId = data1.checkout && data1.checkout.customer_id;
 
   // BƯỚC 2: Chốt đơn với sản phẩm (KHỚP EXTENSION — shipping_address: null, billing_address: null, payment_details)
   const step2Url = "https://sapo-socials.sapoapps.vn/api/checkouts/" + checkoutToken + "/complete?conversation_id=" + encodeURIComponent(conversationId) + "&page_id=" + encodeURIComponent(pageId) + "&language=vi";
@@ -613,8 +628,8 @@ function createSapoOrder_(params) {
   }
 
   const data2 = JSON.parse(res2.getContentText());
-  const orderObj = data2.order || data2.checkout?.order || data2;
-  const orderId = orderObj.id || data2.checkout?.order_id;
+  const orderObj = data2.order || (data2.checkout && data2.checkout.order) || data2;
+  const orderId = orderObj.id || (data2.checkout && data2.checkout.order_id);
 
   if (!orderId) {
     return { success: false, error: "Step 2 không trả về Order ID" };
@@ -683,8 +698,9 @@ function scanMobileTaggedConversations_() {
     return;
   }
 
-  // 1. Tự động lấy tất cả các Tag ID liên quan đến "Bảng giá" từ Sapo
+  // 1. Tự động lấy tất cả các Tag ID liên quan đến "Bảng giá" và "Mobile" từ Sapo
   let bangGiaTagIds = [CONFIG.tagIdBangGia];
+  let mobileTagIds = CONFIG.tagIdMobile ? [CONFIG.tagIdMobile] : ["6afd6aa32d0deb00017f188e"];
   try {
     const tagsUrl = "https://sapo-socials.sapoapps.vn/api/tags?language=vi";
     const tagsRes = UrlFetchApp.fetch(tagsUrl, {
@@ -698,13 +714,18 @@ function scanMobileTaggedConversations_() {
     });
     if (tagsRes.getResponseCode() === 200) {
       const tagsData = JSON.parse(tagsRes.getContentText());
-      const tagList = tagsData?.tags || tagsData?.data || (Array.isArray(tagsData) ? tagsData : []);
+      const tagList = (tagsData && tagsData.tags) || (tagsData && tagsData.data) || (Array.isArray(tagsData) ? tagsData : []);
       tagList.forEach(function(t) {
         const tid = String(t.id || t._id || t.tag_id || "").trim();
-        const tname = String(t.name || t.title || t.text || "").toLowerCase();
+        const tname = String(t.name || t.title || t.text || "").toLowerCase().trim();
         if (tname.includes("bảng giá") || tname.includes("gui bang gia") || tname.includes("banggia")) {
           if (tid && !bangGiaTagIds.includes(tid)) {
             bangGiaTagIds.push(tid);
+          }
+        }
+        if (tname === "mobile" || tname.includes("mobile")) {
+          if (tid && !mobileTagIds.includes(tid)) {
+            mobileTagIds.push(tid);
           }
         }
       });
@@ -738,7 +759,7 @@ function scanMobileTaggedConversations_() {
     });
     if (pRes.getResponseCode() === 200) {
       const pData = JSON.parse(pRes.getContentText());
-      const pList = pData?.pages || pData?.data || (Array.isArray(pData) ? pData : []);
+      const pList = (pData && pData.pages) || (pData && pData.data) || (Array.isArray(pData) ? pData : []);
       pList.forEach(function(p) {
         const pid = String(p.id || p._id || p.page_id || "").trim();
         if (pid && !pageIdList.includes(pid)) pageIdList.push(pid);
@@ -749,6 +770,9 @@ function scanMobileTaggedConversations_() {
   Logger.log("📱 Quét Mobile: Đang quét " + pageIdList.length + " Pages (" + pageIdList.join(", ") + ")...");
 
   const seenConvIds = {};
+  const currentMobileTagged = {};
+  const scannedConvIds = {};
+  let anySourceSucceeded = false;
 
   function processConvList_(convs, sourceLabel) {
     if (!convs || !Array.isArray(convs)) return;
@@ -756,36 +780,63 @@ function scanMobileTaggedConversations_() {
       const convId = conv.id || conv.conversation_id;
       if (!convId || seenConvIds[convId]) return;
       seenConvIds[convId] = true;
+      scannedConvIds[String(convId)] = true;
 
       const pageId = conv.page_id || conv.pageId || "";
       const fbPageId = conv.facebook_page_id || conv.facebookPageId || "";
       const customerName = conv.customer_name || conv.account_name || conv.name || conv.fb_user_name || "Khách Hàng";
+      const customerAvatar = conv.customer_avatar || conv.avatar || conv.account_avatar || (conv.user && conv.user.avatar) || "";
 
-      // KIỂM TRA HỘI THOẠI CÓ GẮN NHÃN BẢNG GIÁ HAY KHÔNG
+      // KIỂM TRA HỘI THOẠI CÓ GẮN NHÃN BẢNG GIÁ HOẶC NHÃN MOBILE HAY KHÔNG
       const rawTags = conv.tags || conv.tag_ids || conv.tag_id_list || [];
       let hasTagBangGia = false;
+      let hasTagMobile = false;
 
       if (Array.isArray(rawTags)) {
         for (let t = 0; t < rawTags.length; t++) {
           const tag = rawTags[t];
           const tagId = String(typeof tag === 'object' ? (tag.id || tag._id || tag.tag_id || "") : tag).trim();
-          const tagName = String(typeof tag === 'object' ? (tag.name || tag.title || tag.text || "") : "").toLowerCase();
+          const tagName = String(typeof tag === 'object' ? (tag.name || tag.title || tag.text || "") : "").toLowerCase().trim();
           
-          if (bangGiaTagIds.includes(tagId) || tagName.includes("bảng giá") || tagName.includes("gui bang gia")) {
+          if (!hasTagBangGia && (bangGiaTagIds.includes(tagId) || tagName.includes("bảng giá") || tagName.includes("gui bang gia"))) {
             hasTagBangGia = true;
-            break;
           }
+          if (!hasTagMobile && (mobileTagIds.includes(tagId) || tagName === "mobile" || tagName.includes("mobile"))) {
+            hasTagMobile = true;
+          }
+          if (hasTagBangGia && hasTagMobile) break;
         }
       } else if (typeof rawTags === 'string') {
+        const rawLower = rawTags.toLowerCase();
         for (let k = 0; k < bangGiaTagIds.length; k++) {
           if (rawTags.includes(bangGiaTagIds[k])) {
             hasTagBangGia = true;
             break;
           }
         }
-        if (rawTags.toLowerCase().includes("bảng giá") || rawTags.toLowerCase().includes("gui bang gia")) {
+        if (rawLower.includes("bảng giá") || rawLower.includes("gui bang gia")) {
           hasTagBangGia = true;
         }
+        for (let m = 0; m < mobileTagIds.length; m++) {
+          if (rawTags.includes(mobileTagIds[m])) {
+            hasTagMobile = true;
+            break;
+          }
+        }
+        if (rawLower.includes("mobile")) {
+          hasTagMobile = true;
+        }
+      }
+
+      if (hasTagMobile) {
+        currentMobileTagged[String(convId)] = {
+          convId: String(convId),
+          pageId: String(pageId || ""),
+          fbPageId: String(fbPageId || ""),
+          customerName: String(customerName || "Khách Hàng"),
+          avatar: String(customerAvatar || ""),
+          taggedAt: Date.now()
+        };
       }
 
       if (!hasTagBangGia) return;
@@ -817,7 +868,8 @@ function scanMobileTaggedConversations_() {
     });
     if (cRes.getResponseCode() === 200) {
       const cData = JSON.parse(cRes.getContentText());
-      const cList = cData?.conversations || cData?.data || (Array.isArray(cData) ? cData : []);
+      const cList = (cData && cData.conversations) || (cData && cData.data) || (Array.isArray(cData) ? cData : []);
+      anySourceSucceeded = true;
       Logger.log("📥 Hộp thư kết hợp: Đọc được " + cList.length + " hội thoại gần nhất.");
       processConvList_(cList, "Hộp thư kết hợp");
     }
@@ -840,11 +892,168 @@ function scanMobileTaggedConversations_() {
       });
       if (res.getResponseCode() === 200) {
         const data = JSON.parse(res.getContentText());
-        const conversations = data?.conversations || data?.data || (Array.isArray(data) ? data : []);
+        const conversations = (data && data.conversations) || (data && data.data) || (Array.isArray(data) ? data : []);
+        anySourceSucceeded = true;
         processConvList_(conversations, "Page " + pid);
       }
     } catch(errPage) {}
   });
+
+  if (anySourceSucceeded) {
+    try {
+      _latestMobileScanResult = {
+        currentMobileTagged: currentMobileTagged,
+        scannedConvIds: scannedConvIds,
+        scannedAt: Date.now()
+      };
+    } catch (eSaveScan) {}
+  }
+}
+
+function getContextWebAppUrl_() {
+  if (CONFIG.contextWebAppUrl && String(CONFIG.contextWebAppUrl).trim()) {
+    return String(CONFIG.contextWebAppUrl).trim();
+  }
+  const propUrl = PropertiesService.getScriptProperties().getProperty(STORE_KEYS.contextWebAppUrl);
+  if (propUrl && String(propUrl).trim()) {
+    return String(propUrl).trim();
+  }
+  try {
+    const ss = getSpreadsheet_();
+    if (ss) {
+      const configSheet = ss.getSheetByName("Config");
+      if (configSheet) {
+        const data = configSheet.getDataRange().getValues();
+        for (let i = 1; i < data.length; i++) {
+          if (data[i][0] === "context_webapp_url" && data[i][1]) {
+            return String(data[i][1]).trim();
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  return "";
+}
+
+function saveContextWebAppUrl_(url) {
+  const cleanUrl = String(url || "").trim();
+  if (!cleanUrl) return;
+  PropertiesService.getScriptProperties().setProperty(STORE_KEYS.contextWebAppUrl, cleanUrl);
+  try {
+    const ss = getSpreadsheet_();
+    if (ss) {
+      const configSheet = ss.getSheetByName("Config");
+      if (configSheet) {
+        const data = configSheet.getDataRange().getValues();
+        for (let i = 1; i < data.length; i++) {
+          if (data[i][0] === "context_webapp_url") {
+            configSheet.getRange(i + 1, 2).setValue(cleanUrl);
+            configSheet.getRange(i + 1, 3).setValue(new Date().toLocaleString("vi-VN"));
+            return;
+          }
+        }
+        configSheet.appendRow(["context_webapp_url", cleanUrl, new Date().toLocaleString("vi-VN")]);
+      }
+    }
+  } catch (e) {}
+}
+
+function flushMobileTaggedSync_() {
+  if (!_latestMobileScanResult) return;
+
+  const store = PropertiesService.getScriptProperties();
+  const currentMap = _latestMobileScanResult.currentMobileTagged || {};
+  const scannedConvIds = _latestMobileScanResult.scannedConvIds || {};
+
+  let prevMap = {};
+  try {
+    const rawPrev = store.getProperty(STORE_KEYS.mobileTaggedMap);
+    if (rawPrev) prevMap = JSON.parse(rawPrev) || {};
+  } catch (ePrev) {
+    prevMap = {};
+  }
+
+  const now = Date.now();
+  const DAY_MS = 86400000;
+  const mergedMap = {};
+  const untaggedIds = [];
+  let hasChanges = false;
+
+  Object.keys(prevMap).forEach(function(cid) {
+    const oldItem = prevMap[cid];
+    if (!oldItem) return;
+    if (currentMap[cid]) {
+      mergedMap[cid] = {
+        convId: currentMap[cid].convId,
+        pageId: currentMap[cid].pageId || oldItem.pageId || "",
+        fbPageId: currentMap[cid].fbPageId || oldItem.fbPageId || "",
+        customerName: currentMap[cid].customerName || oldItem.customerName || "Khách Hàng",
+        avatar: currentMap[cid].avatar || oldItem.avatar || "",
+        taggedAt: oldItem.taggedAt || now
+      };
+    } else if (scannedConvIds[cid]) {
+      untaggedIds.push(cid);
+      hasChanges = true;
+    } else if (oldItem.taggedAt && (now - oldItem.taggedAt < DAY_MS)) {
+      mergedMap[cid] = oldItem;
+    } else {
+      untaggedIds.push(cid);
+      hasChanges = true;
+    }
+  });
+
+  Object.keys(currentMap).forEach(function(cid) {
+    if (!prevMap[cid]) {
+      mergedMap[cid] = currentMap[cid];
+      hasChanges = true;
+    }
+  });
+
+  store.setProperty(STORE_KEYS.mobileTaggedMap, JSON.stringify(mergedMap));
+
+  const targetUrl = getContextWebAppUrl_();
+  const isPending = store.getProperty(STORE_KEYS.mobileSyncPending) === "1";
+
+  if (!hasChanges && !isPending) {
+    return;
+  }
+
+  if (!targetUrl) {
+    store.setProperty(STORE_KEYS.mobileSyncPending, "1");
+    return;
+  }
+
+  const taggedList = Object.keys(mergedMap).map(function(cid) { return mergedMap[cid]; });
+  Logger.log("📱 Đồng bộ nhãn Mobile -> Web: " + taggedList.length + " đang gắn, " + untaggedIds.length + " vừa gỡ.");
+
+  const res = UrlFetchApp.fetch(targetUrl, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({
+      action: "sync_mobile_tagged",
+      sapoToken: getSapoToken_(),
+      tenant: CONFIG.sapoTenant,
+      taggedCustomers: taggedList,
+      untaggedConvIds: untaggedIds
+    }),
+    muteHttpExceptions: true
+  });
+
+  const code = res.getResponseCode();
+  const rawBody = res.getContentText() || "";
+  let resJson = null;
+  try { resJson = JSON.parse(rawBody); } catch (eJ) {}
+
+  if (code >= 200 && code < 300 && resJson && resJson.success) {
+    if (resJson.remainingPending > 0) {
+      store.setProperty(STORE_KEYS.mobileSyncPending, "1");
+    } else {
+      store.deleteProperty(STORE_KEYS.mobileSyncPending);
+    }
+  } else {
+    store.setProperty(STORE_KEYS.mobileSyncPending, "1");
+    Logger.log("⚠️ Web Mobile đồng bộ chưa thành công (HTTP " + code + " — kiểm tra quyền Web App 'Bất kỳ ai'): " + rawBody.substring(0, 180));
+  }
 }
 
 // ============================================
@@ -1362,6 +1571,35 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: true, count: pids.length })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 1c. Đăng ký URL Web Mobile (ex-ngucanhquedich) & trả về Token + danh sách khách gắn nhãn Mobile hiện tại
+    if (data.action === "register_context_url") {
+      if (data.url) saveContextWebAppUrl_(String(data.url).trim());
+      const store = PropertiesService.getScriptProperties();
+      let prevMap = {};
+      try { prevMap = JSON.parse(store.getProperty(STORE_KEYS.mobileTaggedMap) || "{}") || {}; } catch (eM) {}
+      const list = Object.keys(prevMap).map(function(k) { return prevMap[k]; });
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        sapoToken: getSapoToken_(),
+        tenant: CONFIG.sapoTenant,
+        taggedCustomers: list
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 1d. Lấy nhanh Sapo Token & danh sách khách gắn nhãn Mobile hiện tại
+    if (data.action === "get_mobile_state") {
+      const store = PropertiesService.getScriptProperties();
+      let prevMap = {};
+      try { prevMap = JSON.parse(store.getProperty(STORE_KEYS.mobileTaggedMap) || "{}") || {}; } catch (eM) {}
+      const list = Object.keys(prevMap).map(function(k) { return prevMap[k]; });
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        sapoToken: getSapoToken_(),
+        tenant: CONFIG.sapoTenant,
+        taggedCustomers: list
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // 2. Nếu là Webhook từ Zalo Bot
     var userId = "";
     if (data.message && data.message.chat && data.message.chat.id) {
@@ -1381,10 +1619,11 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  const token = e?.parameter?.token;
+  const params = (e && e.parameter) ? e.parameter : {};
+  const token = params.token;
   if (token) saveSapoToken_(token);
 
-  const action = e?.parameter?.action;
+  const action = params.action;
   if (action === "get" || action === "save" || action === "delete") {
     return handleContextSync_(e);
   }
@@ -1397,8 +1636,9 @@ function doGet(e) {
 // ----------------------------------
 function handleContextSync_(e) {
   try {
-    const action = e?.parameter?.action;
-    const convId = String(e?.parameter?.convId || "").trim();
+    const params = (e && e.parameter) ? e.parameter : {};
+    const action = params.action;
+    const convId = String(params.convId || "").trim();
     if (!convId || convId === "default") {
       return ContentService.createTextOutput(JSON.stringify({ success: true, data: [] })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -1435,12 +1675,12 @@ function handleContextSync_(e) {
 
     // 2. ACTION SAVE: LƯU TÓM TẮT CHỈ THEO convId (CỘT A)
     if (action === "save") {
-      let customerName = String(e?.parameter?.customerName || "").trim();
+      let customerName = String(params.customerName || "").trim();
       try {
         if (customerName.includes("%")) customerName = decodeURIComponent(customerName);
       } catch(eCust) {}
 
-      let rawData = String(e?.parameter?.data || "").trim();
+      let rawData = String(params.data || "").trim();
       try {
         if (rawData.includes("%")) rawData = decodeURIComponent(rawData);
       } catch(eData) {}

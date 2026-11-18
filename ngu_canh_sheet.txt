@@ -1,13 +1,78 @@
 /**
- * GOOGLE APPS SCRIPT: ĐỒNG BỘ NGỮ CẢNH EXTENSION (v3.1 - TextFinder tìm đúng dòng theo convId)
- * ---------------------------------------------------
- * - SO KHỚP DUY NHẤT THEO convId (CỘT A).
- * - TUYỆT ĐỐI KHÔNG SO KHỚP THEO TÊN KHÁCH (Tránh ghi đè khi trùng tên).
- * - Dùng TextFinder tìm đúng dòng thay vì đọc toàn bộ dữ liệu Sheet.
- * - doGet: Đọc (action=get), Lưu ngắn (action=save), Xóa (action=delete).
- * - doPost: Lưu đè Hồ sơ ngữ cảnh tổng hợp dài (action=save_profile) không giới hạn độ dài URL.
- * ---------------------------------------------------
+ * GOOGLE APPS SCRIPT: ĐỒNG BỘ NGỮ CẢNH EXTENSION & WEB MOBILE (v4.0)
+ * -------------------------------------------------------------------
+ * - Giữ nguyên 100% API cho Extension PC (so khớp duy nhất convId Cột A).
+ * - Nâng cấp thêm Web App Mobile (/exec) cho điện thoại:
+ *   + Nhận danh sách khách gắn nhãn "Mobile" từ project BDSD.
+ *   + Tự động tải tối đa 500 tin nhắn Sapo -> Lọc Số Seri (Regex) & 8 tin cuối.
+ *   + Tự động gọi AI tóm tắt Hồ sơ ngữ cảnh (prompt 100% như Extension) -> Lưu Sheet.
+ *   + Luận quẻ 2 bước (kinh-dich.md -> viet-lai.md) + 3 tầng Fallback như Extension.
+ *   + Lưu kết quả Copy tạm trong CacheService (RAM) & localStorage (không làm đầy Sheet).
+ * -------------------------------------------------------------------
  */
+
+// ===================================================================
+// 1. CẤU HÌNH MẶC ĐỊNH & HẰNG SỐ
+// ===================================================================
+const MOB_PROP_KEYS = {
+  SETTINGS: 'MOBILE_SETTINGS_V1',
+  CUST_INDEX: 'MOBILE_CUST_INDEX_V1',
+  CUST_PREFIX: 'MOB_CUST_',
+  SAPO_TOKEN: 'MOBILE_SAPO_TOKEN_V1',
+  SAPO_TENANT: 'MOBILE_SAPO_TENANT_V1'
+};
+
+const MOB_TTL_MS = 86400000; // 24 giờ
+const MOB_MAX_PAGES = 25;    // 25 x 20 = 500 tin nhắn Sapo gần nhất
+const MOB_TIME_BUDGET_MS = 28000; // Ngân sách tối đa khi xử lý hàng đợi từ sync_mobile_tagged để tránh timeout doPost
+
+const MOB_SKIP_PATTERNS = [
+  "tập trung nghĩ về",
+  "rút lấy 1 tờ tiền bất kỳ",
+  "rút 1 tờ tiền bất kỳ",
+  "hướng dẫn cách gieo khác",
+  "không có tiền mặt thì",
+  "mình gửi bạn giá các gói",
+  "chọn gói xem và chuyển khoản",
+  "nội dung ck:",
+  "ok bạn, để mình xem",
+  "bạn cân nhắc và tham khảo thông tin nhé",
+  "khi nào bạn cần xem thêm vấn đề nào khác",
+  "đã trả lời một quảng cáo",
+  "xem ngay với giá chỉ 20k",
+  "cần xem về vấn đề gì",
+  "mình gửi bạn bảng giá",
+  "bảng giá các gói dịch vụ",
+  "bạn ơi, quẻ mình gieo rồi ấy",
+  "bạn đợi mình chút"
+];
+
+const MOB_DEFAULT_SETTINGS = {
+  bdsdUrl: 'https://script.google.com/macros/s/AKfycbz5DPNOoYN3w3X5ppE_DKF4zf3O3Pw7YDg10rfS18qtoQ7wIE7jtJewJ9X3rRfZ5B83/exec',
+  selfUrl: 'https://script.google.com/macros/s/AKfycbzDk2MwmRuYkdKxWndwRFa0caD7apL6k6gLW71pfQbtGQipFz6yiar3xFXhDuZq_PIAvQ/exec',
+  luchaoUrl: 'https://dshc-luc-hao.vercel.app/',
+  geminiApiKey: '',
+  geminiModel: 'gemini-3.5-flash-lite',
+  geminiBaseUrl: '',
+  aiTemperature: '',
+  aiTopP: '',
+  customAiBaseUrl: 'https://api.z.ai/api/paas/v4',
+  customAiApiKey: '',
+  customAiModel: 'glm-4.7-flash',
+  rewriteType: 'gemini',
+  rewriteBaseUrl: '',
+  rewriteApiKey: '',
+  rewriteModel: 'gemini-3.5-flash-lite',
+  rewriteTemperature: '',
+  rewriteTopP: ''
+};
+
+// ===================================================================
+// 2. HÀM ĐỌC / GHI GOOGLE SHEET CŨ (BẢO TOÀN 100% EXTENSION PC)
+// ===================================================================
+function getSpreadsheetSafe_() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
 
 function getContextSheet_(ss) {
   return ss.getSheetByName("Ngữ cảnh Extension")
@@ -27,51 +92,135 @@ function findRowsByConvId_(sheet, convId) {
   return ranges.map(r => r.getRow()).sort((a, b) => a - b);
 }
 
+function readConvProfileFromSheet_(convId) {
+  const cid = String(convId || "").trim();
+  if (!cid || cid === "default") return { summaries: [], updatedAt: "" };
+  const ss = getSpreadsheetSafe_();
+  const sheet = getContextSheet_(ss);
+  const matchedRows = findRowsByConvId_(sheet, cid);
+  if (matchedRows.length === 0) return { summaries: [], updatedAt: "" };
+
+  const targetRow = matchedRows[matchedRows.length - 1];
+  const rowValues = sheet.getRange(targetRow, 1, 1, 4).getValues()[0];
+  let summaries = [];
+  const rowTime = rowValues[2] ? String(rowValues[2]) : "";
+  try {
+    summaries = JSON.parse(rowValues[1]);
+    if (!Array.isArray(summaries)) summaries = [{ text: String(rowValues[1]), time: rowTime }];
+  } catch (err) {
+    if (rowValues[1]) summaries = [{ text: String(rowValues[1]), time: rowTime }];
+  }
+  return { summaries: summaries, updatedAt: rowTime };
+}
+
+function saveConvProfileToSheet_(convId, customerName, profileText) {
+  const cid = String(convId || "").trim();
+  let text = String(profileText || "").trim();
+  if (!cid || cid === "default" || !text) {
+    throw new Error("Missing convId or data");
+  }
+  // Giới hạn an toàn 45.000 ký tự (trần 50.000 ký tự / ô Google Sheet)
+  if (text.length > 45000) {
+    text = text.slice(-45000);
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const ss = getSpreadsheetSafe_();
+    const sheet = getContextSheet_(ss);
+    const nowStr = Utilities.formatDate(new Date(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss");
+    const finalJsonData = JSON.stringify([{ text: text, time: nowStr }]);
+    const matchedRows = findRowsByConvId_(sheet, cid);
+    const foundRow = matchedRows.length > 0 ? matchedRows[matchedRows.length - 1] : -1;
+
+    if (foundRow > 0) {
+      sheet.getRange(foundRow, 1).setValue(cid);
+      sheet.getRange(foundRow, 2).setValue(finalJsonData);
+      sheet.getRange(foundRow, 3).setValue(nowStr);
+      if (customerName) sheet.getRange(foundRow, 4).setValue(customerName);
+      for (let i = matchedRows.length - 2; i >= 0; i--) {
+        sheet.deleteRow(matchedRows[i]);
+      }
+    } else {
+      sheet.appendRow([cid, finalJsonData, nowStr, customerName || "Khách Hàng"]);
+    }
+    return nowStr;
+  } finally {
+    try { lock.releaseLock(); } catch (eLock) {}
+  }
+}
+
+function deleteConvProfileFromSheet_(convId) {
+  const cid = String(convId || "").trim();
+  if (!cid || cid === "default") return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const ss = getSpreadsheetSafe_();
+    const sheet = getContextSheet_(ss);
+    const matchedRows = findRowsByConvId_(sheet, cid);
+    for (let i = matchedRows.length - 1; i >= 0; i--) {
+      sheet.deleteRow(matchedRows[i]);
+    }
+  } finally {
+    try { lock.releaseLock(); } catch (eLock) {}
+  }
+}
+
+// ===================================================================
+// 3. CỔNG WEB APP ENTRYPOINTS (doGet / doPost)
+// ===================================================================
 function doGet(e) {
   try {
-    const action = e?.parameter?.action;
-    const convId = String(e?.parameter?.convId || "").trim();
+    const params = (e && e.parameter) ? e.parameter : {};
+    const action = params.action || "";
+
+    // Nếu mở trực tiếp trên trình duyệt (không truyền action hoặc action=ui/mobile) -> Trả Web Mobile
+    if (!action || action === "ui" || action === "mobile") {
+      let initialStateJson = "null";
+      try {
+        initialStateJson = JSON.stringify(mobileGetDashboardState({}))
+          .replace(/</g, "\\u003c")
+          .replace(/>/g, "\\u003e")
+          .replace(/\u2028/g, "\\u2028")
+          .replace(/\u2029/g, "\\u2029");
+      } catch (eInit) {}
+      return HtmlService.createHtmlOutput(getMobileWebHtml_(initialStateJson))
+        .setTitle("Kinh Dịch Mobile — Hồ Sơ & Luận Quẻ")
+        .addMetaTag("viewport", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no")
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    }
+
+    const convId = String(params.convId || "").trim();
     if (!convId || convId === "default") {
       return ContentService.createTextOutput(JSON.stringify({ success: true, data: [], updatedAt: "" })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getSpreadsheetSafe_();
     const sheet = getContextSheet_(ss);
 
     // 1. ACTION GET: ĐỌC LỊCH SỬ CHỈ THEO CỘT A (convId)
     if (action === "get") {
-      const matchedRows = findRowsByConvId_(sheet, convId);
-      if (matchedRows.length > 0) {
-        const targetRow = matchedRows[matchedRows.length - 1];
-        const rowValues = sheet.getRange(targetRow, 1, 1, 4).getValues()[0];
-        let summaries = [];
-        const rowTime = rowValues[2] ? String(rowValues[2]) : "";
-        try {
-          summaries = JSON.parse(rowValues[1]);
-          if (!Array.isArray(summaries)) summaries = [{ text: String(rowValues[1]), time: rowTime }];
-        } catch(err) {
-          if (rowValues[1]) summaries = [{ text: String(rowValues[1]), time: rowTime }];
-        }
-        return ContentService.createTextOutput(JSON.stringify({
-          success: true,
-          data: summaries,
-          updatedAt: rowTime
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-      return ContentService.createTextOutput(JSON.stringify({ success: true, data: [], updatedAt: "" })).setMimeType(ContentService.MimeType.JSON);
+      const res = readConvProfileFromSheet_(convId);
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        data: res.summaries,
+        updatedAt: res.updatedAt
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // 2. ACTION SAVE (GET CŨ): LƯU TÓM TẮT CHỈ THEO CỘT A (convId)
     if (action === "save") {
-      let customerName = String(e?.parameter?.customerName || "").trim();
+      let customerName = String(params.customerName || "").trim();
       try {
         if (customerName.includes("%")) customerName = decodeURIComponent(customerName);
-      } catch(eCust) {}
+      } catch (eCust) {}
 
-      let rawData = String(e?.parameter?.data || "").trim();
+      let rawData = String(params.data || "").trim();
       try {
         if (rawData.includes("%")) rawData = decodeURIComponent(rawData);
-      } catch(eData) {}
+      } catch (eData) {}
 
       const nowStr = new Date().toLocaleString("vi-VN");
       const matchedRows = findRowsByConvId_(sheet, convId);
@@ -84,7 +233,7 @@ function doGet(e) {
         try {
           existingSummaries = JSON.parse(rowValues[1]);
           if (!Array.isArray(existingSummaries)) existingSummaries = [{ text: String(rowValues[1]), time: rowValues[2] }];
-        } catch(err) {
+        } catch (err) {
           if (rowValues[1]) existingSummaries = [{ text: String(rowValues[1]), time: rowValues[2] }];
         }
       }
@@ -96,12 +245,11 @@ function doGet(e) {
           existingSummaries = parsed;
           newSummaryObj = null;
         }
-      } catch(eJson) {}
+      } catch (eJson) {}
 
       if (newSummaryObj) {
-        // Kiểm tra chống trùng: Nếu tóm tắt mới trùng với tóm tắt cuối cùng của convId này thì bỏ qua
         const lastSummary = existingSummaries[existingSummaries.length - 1];
-        const lastText = typeof lastSummary === 'string' ? lastSummary : lastSummary?.text;
+        const lastText = typeof lastSummary === 'string' ? lastSummary : (lastSummary && lastSummary.text ? lastSummary.text : "");
         if (!lastText || lastText.trim() !== newSummaryObj.text.trim()) {
           existingSummaries.push(newSummaryObj);
           if (existingSummaries.length > 3) existingSummaries = existingSummaries.slice(-3);
@@ -111,13 +259,11 @@ function doGet(e) {
       const finalJsonData = JSON.stringify(existingSummaries);
 
       if (foundRow > 0) {
-        // Cập nhật đúng dòng có convId đó
         sheet.getRange(foundRow, 1).setValue(convId);
         sheet.getRange(foundRow, 2).setValue(finalJsonData);
         sheet.getRange(foundRow, 3).setValue(nowStr);
         if (customerName) sheet.getRange(foundRow, 4).setValue(customerName);
       } else {
-        // TẠO DÒNG MỚI HOÀN TOÀN Ở DƯỚI CÙNG
         sheet.appendRow([
           convId,
           finalJsonData,
@@ -128,76 +274,2672 @@ function doGet(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: true, time: nowStr })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 3. ACTION DELETE: XÓA CHỈ THEO CỘT A (convId)
+    // 3. ACTION DELETE: XÓA CHỈ THEO convId (CỘT A)
     if (action === "delete") {
-      const matchedRows = findRowsByConvId_(sheet, convId);
-      for (let i = matchedRows.length - 1; i >= 0; i--) {
-        sheet.deleteRow(matchedRows[i]);
-      }
+      deleteConvProfileFromSheet_(convId);
       return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
     }
 
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Invalid action" })).setMimeType(ContentService.MimeType.JSON);
-  } catch(err) {
+  } catch (err) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
-// 4. ACTION POST (MỚI): LƯU ĐÈ HỒ SƠ NGỮ CẢNH TỔNG HỢP DÀI (KHÔNG GIỚI HẠN ĐỘ DÀI URL)
 function doPost(e) {
-  const lock = LockService.getScriptLock();
   try {
     if (!e || !e.postData || !e.postData.contents) {
       return ContentService.createTextOutput(JSON.stringify({ success: false, error: "No post data" })).setMimeType(ContentService.MimeType.JSON);
     }
 
     let body = {};
-    try { body = JSON.parse(e.postData.contents); } catch(err) {}
+    try { body = JSON.parse(e.postData.contents); } catch (err) {}
 
+    // 1. ACTION CŨ CỦA EXTENSION PC: LƯU ĐÈ HỒ SƠ NGỮ CẢNH
     if (body.action === "save_profile" || body.action === "save") {
       const convId = String(body.convId || "").trim();
       const customerName = String(body.customerName || "").trim();
-      let profileText = String(body.data || body.profile || "").trim();
+      const profileText = String(body.data || body.profile || "").trim();
 
       if (!convId || convId === "default" || !profileText) {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Missing convId or data" })).setMimeType(ContentService.MimeType.JSON);
       }
 
-      // Giới hạn an toàn 45.000 ký tự để không bao giờ vượt trần 50.000 ký tự của 1 ô Google Sheet
-      if (profileText.length > 45000) {
-        profileText = profileText.slice(-45000);
-      }
-
-      lock.waitLock(15000);
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const sheet = getContextSheet_(ss);
-      const nowStr = new Date().toLocaleString("vi-VN");
-
-      // Lưu dạng mảng 1 phần tử [{text, time}] để tương thích ngược 100% với hàm get và bản cũ
-      const finalJsonData = JSON.stringify([{ text: profileText, time: nowStr }]);
-
-      const matchedRows = findRowsByConvId_(sheet, convId);
-      const foundRow = matchedRows.length > 0 ? matchedRows[matchedRows.length - 1] : -1;
-
-      if (foundRow > 0) {
-        sheet.getRange(foundRow, 1).setValue(convId);
-        sheet.getRange(foundRow, 2).setValue(finalJsonData);
-        sheet.getRange(foundRow, 3).setValue(nowStr);
-        if (customerName) sheet.getRange(foundRow, 4).setValue(customerName);
-        for (let i = matchedRows.length - 2; i >= 0; i--) {
-          sheet.deleteRow(matchedRows[i]);
-        }
-      } else {
-        sheet.appendRow([convId, finalJsonData, nowStr, customerName || "Khách Hàng"]);
-      }
-
+      const nowStr = saveConvProfileToSheet_(convId, customerName, profileText);
       return ContentService.createTextOutput(JSON.stringify({ success: true, time: nowStr })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 2. ĐỒNG BỘ KHÁCH GẮN NHÃN "MOBILE" TỪ PROJECT BDSD -> LỌC SERI & 5 TIN CUỐI
+    if (body.action === "sync_mobile_tagged") {
+      const result = handleSyncMobileTagged_(body);
+      return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3. FALLBACK RPC CHO WEB MOBILE (PHÒNG TRƯỜNG HỢP google.script.run BỊ CHẶN/LỖI)
+    if (body.action === "mobile_rpc") {
+      const fnName = String(body.fn || "").trim();
+      const args = Array.isArray(body.args) ? body.args : [];
+      const rpcMap = {
+        mobileGetDashboardState: function(a) { return mobileGetDashboardState(a[0]); },
+        mobileSyncWithBdsd: function() { return mobileSyncWithBdsd(); },
+        mobileProcessPendingQueue: function() { return mobileProcessPendingQueue(); },
+        mobileSaveSettings: function(a) { return mobileSaveSettings(a[0]); },
+        mobileBuildContext: function(a) { return mobileBuildContext(a[0]); },
+        mobileReadProfile: function(a) { return mobileReadProfile(a[0]); },
+        mobileClearContext: function(a) { return mobileClearContext(a[0]); },
+        mobileRunDivination: function(a) { return mobileRunDivination(a[0]); },
+        mobileClearResultCache: function(a) { return mobileClearResultCache(a[0], a[1], a[2]); }
+      };
+      if (!rpcMap[fnName]) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown RPC function: " + fnName })).setMimeType(ContentService.MimeType.JSON);
+      }
+      const rpcResult = rpcMap[fnName](args);
+      return ContentService.createTextOutput(JSON.stringify(rpcResult)).setMimeType(ContentService.MimeType.JSON);
+    }
+
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Invalid post action" })).setMimeType(ContentService.MimeType.JSON);
-  } catch(err) {
+  } catch (err) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON);
-  } finally {
-    try { lock.releaseLock(); } catch(eLock) {}
   }
+}
+
+// ===================================================================
+// 4. QUẢN LÝ DANH SÁCH KHÁCH MOBILE & CÀI ĐẶT (PropertiesService)
+// ===================================================================
+function getMobileSettings_() {
+  const store = PropertiesService.getScriptProperties();
+  let saved = {};
+  try {
+    const raw = store.getProperty(MOB_PROP_KEYS.SETTINGS);
+    if (raw) saved = JSON.parse(raw) || {};
+  } catch (e) {}
+  return Object.assign({}, MOB_DEFAULT_SETTINGS, saved);
+}
+
+function saveMobileSettings_(newSettings) {
+  const store = PropertiesService.getScriptProperties();
+  const current = getMobileSettings_();
+  const merged = Object.assign({}, current, newSettings || {});
+  store.setProperty(MOB_PROP_KEYS.SETTINGS, JSON.stringify(merged));
+  return merged;
+}
+
+function getMobileSapoToken_() {
+  return PropertiesService.getScriptProperties().getProperty(MOB_PROP_KEYS.SAPO_TOKEN) || '';
+}
+
+function getMobileTenant_() {
+  return PropertiesService.getScriptProperties().getProperty(MOB_PROP_KEYS.SAPO_TENANT) || 'janet.mysapo.net';
+}
+
+function saveMobileSapoAuth_(token, tenant) {
+  const store = PropertiesService.getScriptProperties();
+  if (token) store.setProperty(MOB_PROP_KEYS.SAPO_TOKEN, String(token).trim());
+  if (tenant) store.setProperty(MOB_PROP_KEYS.SAPO_TENANT, String(tenant).trim());
+}
+
+function readMobileCustIndex_() {
+  const store = PropertiesService.getScriptProperties();
+  let list = [];
+  try {
+    const raw = store.getProperty(MOB_PROP_KEYS.CUST_INDEX);
+    if (raw) list = JSON.parse(raw);
+    if (!Array.isArray(list)) list = [];
+  } catch (e) {
+    list = [];
+  }
+  const now = Date.now();
+  const valid = [];
+  let changed = false;
+  list.forEach(function(item) {
+    if (!item || !item.convId) return;
+    if (item.addedAt && (now - item.addedAt > MOB_TTL_MS)) {
+      store.deleteProperty(MOB_PROP_KEYS.CUST_PREFIX + item.convId);
+      changed = true;
+    } else {
+      valid.push(item);
+    }
+  });
+  if (changed) {
+    store.setProperty(MOB_PROP_KEYS.CUST_INDEX, JSON.stringify(valid));
+  }
+  return valid;
+}
+
+function getMobileCustomer_(convId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(MOB_PROP_KEYS.CUST_PREFIX + convId);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveMobileCustomer_(custObj) {
+  if (!custObj || !custObj.convId) return;
+  const store = PropertiesService.getScriptProperties();
+  // Giới hạn recentMessages nhỏ gọn (tối đa 5 tin cuối) để luôn dưới trần 9KB của mỗi key PropertiesService
+  const copy = Object.assign({}, custObj);
+  if (Array.isArray(copy.recentMessages)) {
+    copy.recentMessages = copy.recentMessages.slice(-5).map(function(m) {
+      return {
+        id: String(m.id || ''),
+        text: String(m.text || '').slice(0, 350),
+        time: String(m.time || '')
+      };
+    });
+  }
+  if (Array.isArray(copy.detectedSerials)) {
+    copy.detectedSerials = copy.detectedSerials.slice(0, 6);
+  }
+  if (copy.ctxError && String(copy.ctxError).length > 300) {
+    copy.ctxError = String(copy.ctxError).slice(0, 300);
+  }
+  store.setProperty(MOB_PROP_KEYS.CUST_PREFIX + copy.convId, JSON.stringify(copy));
+}
+
+function removeMobileCustomer_(convId) {
+  const store = PropertiesService.getScriptProperties();
+  store.deleteProperty(MOB_PROP_KEYS.CUST_PREFIX + convId);
+  const indexList = readMobileCustIndex_().filter(function(it) { return it.convId !== convId; });
+  store.setProperty(MOB_PROP_KEYS.CUST_INDEX, JSON.stringify(indexList));
+}
+
+function applyTaggedCustomerSyncList_(taggedCustomers, untaggedConvIds) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  const store = PropertiesService.getScriptProperties();
+  try {
+    let indexList = readMobileCustIndex_();
+    const indexMap = {};
+    indexList.forEach(function(it) { indexMap[it.convId] = it; });
+
+    // 1. Xóa ngay khách vừa bị gỡ nhãn Mobile
+    if (Array.isArray(untaggedConvIds)) {
+      untaggedConvIds.forEach(function(cid) {
+        const cleanId = String(cid || '').trim();
+        if (!cleanId) return;
+        store.deleteProperty(MOB_PROP_KEYS.CUST_PREFIX + cleanId);
+        delete indexMap[cleanId];
+      });
+    }
+
+    // 2. Đồng bộ danh sách khách đang gắn nhãn Mobile (KHÔNG quét lại nếu khách đang treo chưa gỡ nhãn)
+    const needInitialScanIds = [];
+    const now = Date.now();
+
+    if (Array.isArray(taggedCustomers)) {
+      taggedCustomers.forEach(function(item) {
+        const cid = String(item && item.convId || '').trim();
+        if (!cid) return;
+
+        const existing = getMobileCustomer_(cid);
+        if (!existing) {
+          // Khách MỚI phát hiện gắn nhãn (hoặc vừa gỡ nhãn rồi gắn lại):
+          // Trạng thái mặc định 'idle' -> hiển thị nút "📋 Hồ sơ", KHÔNG tự gọi API AI
+          const newCust = {
+            convId: cid,
+            pageId: String(item.pageId || ''),
+            fbPageId: String(item.fbPageId || ''),
+            customerName: String(item.customerName || 'Khách Hàng'),
+            avatar: String(item.avatar || ''),
+            taggedAt: Number(item.taggedAt || now),
+            addedAt: now,
+            ctxStatus: 'idle',
+            ctxType: '',
+            ctxTime: '',
+            ctxError: '',
+            unlocked: false,
+            initialScanned: false,
+            detectedSerials: [],
+            recentMessages: []
+          };
+          saveMobileCustomer_(newCust);
+          indexMap[cid] = { convId: cid, addedAt: now, taggedAt: newCust.taggedAt };
+          needInitialScanIds.push(cid);
+        } else {
+          // Khách đang treo sẵn: chỉ cập nhật tên/avatar nếu đổi, KHÔNG quét lại tin nhắn
+          let dirty = false;
+          if (item.customerName && item.customerName !== existing.customerName) {
+            existing.customerName = String(item.customerName);
+            dirty = true;
+          }
+          if (item.avatar && item.avatar !== existing.avatar) {
+            existing.avatar = String(item.avatar);
+            dirty = true;
+          }
+          if (item.pageId && !existing.pageId) {
+            existing.pageId = String(item.pageId);
+            dirty = true;
+          }
+          if (dirty) saveMobileCustomer_(existing);
+          if (!existing.initialScanned) needInitialScanIds.push(cid);
+        }
+      });
+    }
+
+    const updatedIndex = Object.keys(indexMap).map(function(k) { return indexMap[k]; });
+    updatedIndex.sort(function(a, b) { return (b.taggedAt || b.addedAt || 0) - (a.taggedAt || a.addedAt || 0); });
+    store.setProperty(MOB_PROP_KEYS.CUST_INDEX, JSON.stringify(updatedIndex));
+    return needInitialScanIds;
+  } finally {
+    try { lock.releaseLock(); } catch (eLock) {}
+  }
+}
+
+function handleSyncMobileTagged_(body) {
+  if (body.sapoToken || body.tenant) {
+    saveMobileSapoAuth_(body.sapoToken, body.tenant);
+  }
+  const taggedCustomers = Array.isArray(body.taggedCustomers) ? body.taggedCustomers : [];
+  const untaggedConvIds = Array.isArray(body.untaggedConvIds) ? body.untaggedConvIds : [];
+
+  const needInitialIds = applyTaggedCustomerSyncList_(taggedCustomers, untaggedConvIds);
+  const startMs = Date.now();
+  let scannedCount = 0;
+  let remainingInitial = 0;
+
+  // Chỉ quét 1 lần duy nhất trang đầu (20 tin nhắn Sapo + Regex lấy Seri & 5 tin cuối, KHÔNG gọi AI)
+  for (let i = 0; i < needInitialIds.length; i++) {
+    if (i > 0 && (Date.now() - startMs > MOB_TIME_BUDGET_MS)) {
+      remainingInitial = needInitialIds.length - i;
+      break;
+    }
+    try {
+      fetchInitialRecentMessagesOnce_(needInitialIds[i]);
+      scannedCount++;
+    } catch (eScan) {
+      Logger.log('⚠️ Lỗi lọc 5 tin cuối ban đầu cho ' + needInitialIds[i] + ': ' + eScan.message);
+    }
+  }
+
+  return {
+    success: true,
+    totalNewFound: needInitialIds.length,
+    scannedCount: scannedCount,
+    remainingPending: remainingInitial
+  };
+}
+
+// ===================================================================
+// 5. TẢI TIN NHẮN SAPO + LỌC SERI (REGEX) + TÓM TẮT HỒ SƠ AI
+// ===================================================================
+function formatSapoMsgTime_(ts, onlyHm) {
+  try {
+    const d = new Date(Number(ts));
+    if (isNaN(d.getTime())) return '';
+    return Utilities.formatDate(d, 'Asia/Ho_Chi_Minh', onlyHm ? 'HH:mm' : 'dd/MM/yyyy HH:mm');
+  } catch (e) {
+    return '';
+  }
+}
+
+function fetchSapoMessagesServer_(convId, token, tenant, maxPages) {
+  if (!convId || convId === 'default') throw new Error('Thiếu mã hội thoại Sapo');
+  if (!token) throw new Error('Chưa có Token Sapo (Hãy kết nối BDSD & mở Sapo trên PC)');
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Bizweb-App-Fpage-Token': token,
+    'X-Sapo-Tenant': tenant || 'janet.mysapo.net'
+  };
+
+  const allMsgs = [];
+  const seenIds = {};
+  let lastTime = null;
+  const userMeta = { name: '', gender: '' };
+  const pageCap = maxPages || MOB_MAX_PAGES;
+
+  for (let page = 1; page <= pageCap; page++) {
+    let url = 'https://sapo-socials.sapoapps.vn/api/conversations/' + encodeURIComponent(convId) + '/messages?language=vi';
+    if (lastTime) url += '&last_time=' + encodeURIComponent(lastTime);
+
+    const res = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: headers,
+      muteHttpExceptions: true
+    });
+
+    const code = res.getResponseCode();
+    if (code < 200 || code >= 300) {
+      throw new Error('Lỗi tải tin nhắn Sapo (HTTP ' + code + ')');
+    }
+
+    const data = JSON.parse(res.getContentText() || '{}');
+    if (page === 1) {
+      userMeta.name = (data && data.user && data.user.name) || (data && data.conversation && data.conversation.account_name) || '';
+      userMeta.gender = (data && data.user && data.user.gender) || '';
+    }
+
+    const msgs = Array.isArray(data.messages) ? data.messages : [];
+    if (msgs.length === 0) break;
+
+    let added = 0;
+    let oldestTs = Infinity;
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      const ts = Number(m.channel_created_on || 0);
+      if (ts > 0 && ts < oldestTs) oldestTs = ts;
+      const mid = String(m.id || ('idx_' + ts + '_' + i));
+      if (!seenIds[mid]) {
+        seenIds[mid] = true;
+        allMsgs.push(m);
+        added++;
+      }
+    }
+
+    if (added === 0 || !isFinite(oldestTs)) break;
+    lastTime = oldestTs;
+  }
+
+  allMsgs.sort(function(a, b) {
+    return Number(a.channel_created_on || 0) - Number(b.channel_created_on || 0);
+  });
+
+  return { messages: allMsgs, userMeta: userMeta };
+}
+
+function extractCustomerRecentAndSerials_(messages) {
+  const customerMsgs = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (!m || m.type !== 'text' || m.is_page_message) continue;
+    if (m.action === 'SEND_AUTOMATION_MESSAGE') continue;
+    const txt = String(m.content || '').trim();
+    if (!txt) continue;
+    customerMsgs.push({
+      id: String(m.id || ('m_' + i)),
+      text: txt,
+      time: formatSapoMsgTime_(m.channel_created_on, true)
+    });
+  }
+
+  // Giữ 5 tin nhắn gần nhất của khách theo đúng trình tự thời gian để bấm ghép nối tiếp tự nhiên
+  const recentMessages = customerMsgs.slice(-5);
+
+  // Lọc số Seri bằng đúng Regex như Extension PC (quét từ tin mới nhất ngược lại để seri mới đứng đầu)
+  const detectedSerials = [];
+  const seenSerial = {};
+  for (let i = customerMsgs.length - 1; i >= 0; i--) {
+    const matches = customerMsgs[i].text.match(/[a-zA-Z0-9]{0,5}\s?\d{6,12}/gi);
+    if (!matches) continue;
+    for (let j = matches.length - 1; j >= 0; j--) {
+      const digits = matches[j].replace(/\D/g, '');
+      if (digits.length >= 6 && digits.length <= 12 && !seenSerial[digits]) {
+        seenSerial[digits] = true;
+        detectedSerials.push(digits);
+      }
+    }
+    if (detectedSerials.length >= 6) break;
+  }
+
+  return { recentMessages: recentMessages, detectedSerials: detectedSerials };
+}
+
+function filterMessagesServer_(messages) {
+  const filteredLines = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.type !== 'text') continue;
+    if (m.action === 'SEND_AUTOMATION_MESSAGE') continue;
+
+    const txt = String(m.content || '').trim();
+    if (!txt || txt.length <= 2) continue;
+
+    const isShop = !!m.is_page_message;
+    const lower = txt.toLowerCase();
+    if (isShop) {
+      let skip = false;
+      for (let p = 0; p < MOB_SKIP_PATTERNS.length; p++) {
+        if (lower.indexOf(MOB_SKIP_PATTERNS[p]) !== -1) {
+          skip = true;
+          break;
+        }
+      }
+      if (skip) continue;
+    }
+
+    const dt = formatSapoMsgTime_(m.channel_created_on, false);
+    const senderLabel = isShop ? 'THẦY (SHOP)' : 'KHÁCH';
+    filteredLines.push((dt ? '[' + dt + '] ' : '') + senderLabel + ': ' + txt);
+  }
+  return filteredLines;
+}
+
+function callGeminiRawServer_(modelName, apiKey, payload) {
+  if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key');
+  const mod = modelName || 'gemini-3.5-flash-lite';
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(mod) + ':generateContent?key=' + encodeURIComponent(apiKey);
+
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  const code = res.getResponseCode();
+  const raw = res.getContentText() || '';
+  if (code < 200 || code >= 300) {
+    let errMsg = 'HTTP ' + code;
+    try {
+      const errJson = JSON.parse(raw);
+      if (errJson && errJson.error && errJson.error.message) errMsg = errJson.error.message;
+    } catch (e) {}
+    const err = new Error(errMsg);
+    if (code === 429 || errMsg.toLowerCase().indexOf('quota') !== -1) err.isQuota = true;
+    throw err;
+  }
+  return JSON.parse(raw);
+}
+
+function callOpenAICompatibleServer_(baseUrl, modelName, apiKey, userPrompt, systemPrompt, temperature, topP) {
+  if (!apiKey) throw new Error('Chưa cấu hình API Key cho provider này');
+  if (!modelName) throw new Error('Chưa cấu hình tên Model');
+  if (!baseUrl) throw new Error('Chưa cấu hình Base URL');
+
+  const cleanBase = String(baseUrl).replace(/\/+$/, '');
+  const endpoint = cleanBase + '/chat/completions';
+
+  const messages = [];
+  if (systemPrompt) {
+    messages.push({ role: 'system', content: systemPrompt });
+  }
+  messages.push({ role: 'user', content: userPrompt });
+
+  const requestBody = {
+    model: modelName,
+    messages: messages
+  };
+  if (typeof temperature === 'number' && !isNaN(temperature)) {
+    requestBody.temperature = temperature;
+  }
+  if (typeof topP === 'number' && !isNaN(topP)) {
+    requestBody.top_p = topP;
+  }
+  if (cleanBase.indexOf('z.ai') !== -1 || cleanBase.indexOf('bigmodel') !== -1) {
+    requestBody.thinking = { type: 'disabled' };
+  }
+
+  const res = UrlFetchApp.fetch(endpoint, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'Authorization': 'Bearer ' + apiKey,
+      'Accept-Language': 'en-US,en'
+    },
+    payload: JSON.stringify(requestBody),
+    muteHttpExceptions: true
+  });
+
+  const code = res.getResponseCode();
+  const raw = res.getContentText() || '';
+  if (code < 200 || code >= 300) {
+    let errMsg = 'Error ' + code;
+    try {
+      const errJson = JSON.parse(raw);
+      if (errJson && errJson.error && errJson.error.message) errMsg = errJson.error.message;
+    } catch (e) {}
+    throw new Error('[' + modelName + '] ' + errMsg);
+  }
+
+  const json = JSON.parse(raw);
+  const text = (json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content || '').trim();
+  if (!text) throw new Error('[' + modelName + '] API trả về kết quả rỗng');
+  return text;
+}
+
+function summarizeContextServer_(params) {
+  const settings = params.settings;
+  const apiKey = String(settings.geminiApiKey || '').trim();
+  if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key trong Cài đặt Web Mobile');
+  const useModel = String(settings.geminiModel || 'gemini-3.5-flash-lite').trim();
+
+  // Dùng NGUYÊN VĂN 100% prompt tổng hợp hồ sơ từ background.js
+  const systemPrompt = [
+    'Bạn là trợ lý phân tích và lập hồ sơ khách hàng xem Kinh Dịch Lục Hào.',
+    'Nhiệm vụ: Đọc dữ liệu hội thoại, tổng hợp thành 1 BẢN HỒ SƠ NGỮ CẢNH ĐẦY ĐỦ, CHÍNH XÁC TUYỆT ĐỐI.',
+    '',
+    'QUY TẮC BẮT BUỘC:',
+    '1. Không bỏ sót bất kỳ thông tin cá nhân (tên, giới tính, tuổi/năm sinh), con số tiền bạc, mốc thời gian, tình tiết câu chuyện, tên quẻ, hào động, dụng thần, kết luận Cát/Hung và Ứng Kỳ nào.',
+    '2. Bắt trọn cả những câu luận giải ngắn của Thầy (Shop) và toàn bộ phản hồi/diễn biến thực tế của khách sau khi xem quẻ.',
+    '3. Chỉ dùng thông tin có trong dữ liệu, không tự suy diễn thêm; chỗ nào không có thì ghi "Chưa rõ". Nếu diễn biến mới khác trước, ghi nhận rõ quá trình thay đổi và chốt trạng thái mới nhất ở tin nhắn cuối cùng.',
+    '4. Trình bày chi tiết, đầy đủ nhất đối với 5-7 lần xem gần nhất; các lần xem quá cũ (nếu có nhiều hơn) thì tóm lược ý chính và kết luận để tổng độ dài toàn bài không vượt quá 2.500 - 3.000 từ. Không viết lời chào mở đầu hay kết thúc.',
+    '',
+    'CẤU TRÚC BẢN HỒ SƠ:',
+    '1. HỒ SƠ & THÔNG TIN CÁ NHÂN KHÁCH HÀNG:',
+    '   - Tên khách, giới tính, tuổi/năm sinh, nghề nghiệp/hoàn cảnh và các đối tượng liên quan.',
+    '2. LỊCH SỬ CÁC QUẺ ĐÃ XEM & DIỄN BIẾN THỰC TẾ THEO THỜI GIAN:',
+    '   - Liệt kê theo từng lần xem (Ngày giờ -> Câu hỏi & Hoàn cảnh khách chia sẻ -> Quẻ & Luận giải/Kết luận/Ứng kỳ của Thầy -> Phản hồi/Diễn biến thực tế của khách sau đó).',
+    '3. GHI CHÚ QUAN TRỌNG ĐỂ KHÔNG MÂU THUẪN KHI LUẬN QUẺ TIẾP THEO:',
+    '   - Trạng thái sự việc hiện tại tính đến tin nhắn cuối cùng đang dừng ở đâu?',
+    '   - Các kết luận và mốc Ứng Kỳ cốt lõi Thầy đã chốt mà lần luận tiếp theo phải giữ đúng mạch, tuyệt đối không mâu thuẫn.'
+  ].join('\n');
+
+  const genderRaw = params.gender || '';
+  const genderLabel = genderRaw === 'female' ? 'Nữ' : (genderRaw === 'male' ? 'Nam' : (genderRaw || 'Chưa rõ'));
+  let userPrompt = 'Khách hàng: ' + (params.customerName || 'Khách Hàng') + ' | Giới tính: ' + genderLabel + '\n';
+  userPrompt += '\n[LỊCH SỬ HỘI THOẠI TRÊN SAPO (Đã lọc ' + params.filteredLines.length + ' tin nhắn cốt lõi)]:\n' + params.filteredLines.join('\n');
+
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      let text = '';
+      if (settings.geminiBaseUrl && String(settings.geminiBaseUrl).trim()) {
+        text = callOpenAICompatibleServer_(settings.geminiBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null);
+      } else {
+        const payload = {
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: userPrompt }] }]
+        };
+        const json = callGeminiRawServer_(useModel, apiKey, payload);
+        text = (json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text || '').trim();
+      }
+      if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
+      return text;
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && e.message || '').toLowerCase();
+      const isTransient = !!(e.isQuota || msg.indexOf('429') !== -1 || msg.indexOf('500') !== -1 || msg.indexOf('502') !== -1 || msg.indexOf('503') !== -1 || msg.indexOf('504') !== -1 || msg.indexOf('timeout') !== -1 || msg.indexOf('overloaded') !== -1);
+      if (attempt < 2 && isTransient) {
+        Utilities.sleep(2000);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr || new Error('Lỗi tổng hợp hồ sơ');
+}
+
+function fetchInitialRecentMessagesOnce_(convId) {
+  const cid = String(convId || '').trim();
+  if (!cid || cid === 'default') return null;
+
+  const existing = getMobileCustomer_(cid);
+  if (!existing || existing.initialScanned) return existing;
+
+  const cache = CacheService.getScriptCache();
+  const lockKey = 'init_scan_' + cid;
+  if (cache.get(lockKey)) return existing;
+  cache.put(lockKey, '1', 60);
+
+  try {
+    let sapoToken = getMobileSapoToken_();
+    let sapoTenant = getMobileTenant_();
+    if (!sapoToken) {
+      const syncRes = pullStateFromBdsd_();
+      if (syncRes && syncRes.sapoToken) {
+        sapoToken = syncRes.sapoToken;
+        sapoTenant = syncRes.tenant || sapoTenant;
+      }
+    }
+    if (!sapoToken) return existing;
+
+    // Chỉ tải đúng 1 trang đầu (20 tin nhắn gần nhất) để lọc Regex lấy Seri + 5 tin cuối (KHÔNG gọi AI)
+    const sapoData = fetchSapoMessagesServer_(cid, sapoToken, sapoTenant, 1);
+    const messages = sapoData.messages || [];
+    const userMeta = sapoData.userMeta || {};
+    const extracted = extractCustomerRecentAndSerials_(messages);
+
+    const latest = getMobileCustomer_(cid) || existing;
+    if (!latest.customerName || latest.customerName === 'Khách Hàng') {
+      if (userMeta.name) latest.customerName = userMeta.name;
+    }
+    latest.recentMessages = extracted.recentMessages;
+    latest.detectedSerials = extracted.detectedSerials;
+    latest.initialScanned = true;
+    saveMobileCustomer_(latest);
+    return latest;
+  } catch (e) {
+    Logger.log('⚠️ Lỗi quét 5 tin cuối ban đầu cho ' + cid + ': ' + e.message);
+    return existing;
+  } finally {
+    cache.remove(lockKey);
+  }
+}
+
+function buildCustomerContextOnServer_(convId) {
+  const cid = String(convId || '').trim();
+  if (!cid || cid === 'default') throw new Error('Thiếu convId');
+
+  const cache = CacheService.getScriptCache();
+  const lockKey = 'ctx_run_' + cid;
+  if (cache.get(lockKey)) {
+    return getMobileCustomer_(cid) || { convId: cid, ctxStatus: 'running' };
+  }
+  cache.put(lockKey, '1', 180);
+
+  let cust = getMobileCustomer_(cid) || {
+    convId: cid,
+    customerName: 'Khách Hàng',
+    avatar: '',
+    addedAt: Date.now(),
+    taggedAt: Date.now(),
+    detectedSerials: [],
+    recentMessages: []
+  };
+
+  try {
+    cust.ctxStatus = 'running';
+    cust.ctxError = '';
+    saveMobileCustomer_(cust);
+
+    // Nếu chưa có Token Sapo, thử kéo từ BDSD nếu đã cài bdsdUrl
+    let sapoToken = getMobileSapoToken_();
+    let sapoTenant = getMobileTenant_();
+    if (!sapoToken) {
+      const syncRes = pullStateFromBdsd_();
+      if (syncRes && syncRes.sapoToken) {
+        sapoToken = syncRes.sapoToken;
+        sapoTenant = syncRes.tenant || sapoTenant;
+      }
+    }
+
+    const sapoData = fetchSapoMessagesServer_(cid, sapoToken, sapoTenant);
+    const messages = sapoData.messages || [];
+    const userMeta = sapoData.userMeta || {};
+    const finalName = (cust.customerName && cust.customerName !== 'Khách Hàng') ? cust.customerName : (userMeta.name || 'Khách Hàng');
+    cust.customerName = finalName;
+
+    const extracted = extractCustomerRecentAndSerials_(messages);
+    cust.recentMessages = extracted.recentMessages;
+    cust.detectedSerials = extracted.detectedSerials;
+    cust.initialScanned = true;
+    saveMobileCustomer_(cust);
+
+    const filteredLines = filterMessagesServer_(messages);
+    if (filteredLines.length === 0) {
+      cust.ctxStatus = 'done';
+      cust.ctxType = 'new_customer';
+      cust.ctxTime = Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'dd/MM/yyyy HH:mm:ss');
+      cust.ctxError = '';
+      cust.unlocked = true;
+      saveMobileCustomer_(cust);
+      return cust;
+    }
+
+    const settings = getMobileSettings_();
+    const profileText = summarizeContextServer_({
+      settings: settings,
+      customerName: finalName,
+      gender: userMeta.gender,
+      filteredLines: filteredLines
+    });
+
+    const nowTime = saveConvProfileToSheet_(cid, finalName, profileText);
+    cust.ctxStatus = 'done';
+    cust.ctxType = 'ok';
+    cust.ctxTime = nowTime;
+    cust.ctxError = '';
+    cust.unlocked = true;
+    saveMobileCustomer_(cust);
+    return cust;
+  } catch (err) {
+    cust.ctxStatus = 'error';
+    cust.ctxType = 'error_no_old';
+    cust.ctxError = err && err.message ? err.message : 'Lỗi tải hoặc tổng hợp hồ sơ';
+    saveMobileCustomer_(cust);
+    return cust;
+  } finally {
+    cache.remove(lockKey);
+  }
+}
+
+// ===================================================================
+// 6. BỘ LÕI LUẬN QUẺ & VIẾT LẠI + 3 TẦNG FALLBACK (GIỐNG HỆT EXTENSION)
+// ===================================================================
+function fetchTextWithCacheServer_(url, cacheKey) {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached) return cached;
+  } catch (e) {}
+
+  try {
+    const res = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+    if (res.getResponseCode() >= 200 && res.getResponseCode() < 300) {
+      const txt = res.getContentText() || '';
+      if (txt) {
+        // CacheService giới hạn ~100KB mỗi khóa; chỉ cache nếu an toàn < 90KB
+        if (txt.length < 90000) {
+          try { cache.put(cacheKey, txt, 21600); } catch (ePut) {}
+        }
+        return txt;
+      }
+    }
+  } catch (eFetch) {}
+  return '';
+}
+
+function buildHistoryContextFromSheet_(convId) {
+  try {
+    const res = readConvProfileFromSheet_(convId);
+    const items = (res.summaries || []).map(function(s) {
+      return {
+        text: String(typeof s === 'string' ? s : (s && s.text || '')).trim(),
+        time: (s && typeof s === 'object' && s.time) ? String(s.time) : ''
+      };
+    }).filter(function(x) { return x.text.length > 0; });
+
+    if (items.length === 1) {
+      const updatedAt = res.updatedAt || items[0].time || '';
+      const timeTag = updatedAt ? (' (cập nhật ' + updatedAt + ')') : '';
+      return '\n\n---\n[NGỮ CẢNH HỒ SƠ KHÁCH HÀNG & CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ' + timeTag + ' — Hãy tham khảo kỹ hoàn cảnh, diễn biến thực tế và các kết luận/ứng kỳ đã báo để luận giải sâu sát, nhất quán, không mâu thuẫn với các lần trước]:\n' + items[0].text + '\n';
+    }
+    if (items.length > 1) {
+      let ctx = '\n\n---\n[NGỮ CẢNH CÁC QUẺ ĐÃ LUẬN TRƯỚC ĐÓ CHO KHÁCH NÀY — Hãy tham khảo để luận nhất quán, không mâu thuẫn với các quẻ trước]:\n';
+      items.forEach(function(it, idx) {
+        const t = it.time ? (' (' + it.time + ')') : '';
+        ctx += '\nQuẻ trước #' + (idx + 1) + t + ': ' + it.text + '\n';
+      });
+      return ctx;
+    }
+  } catch (e) {}
+  return '';
+}
+
+function parseOptionalNumber_(val) {
+  if (val === '' || val === undefined || val === null) return null;
+  const num = parseFloat(val);
+  return isNaN(num) ? null : num;
+}
+
+function runMobileDivinationServer_(params) {
+  const convId = String(params && params.convId || '').trim();
+  const serial = String(params && params.serial || '').trim();
+  const dateObj = params && params.dateObj ? params.dateObj : null;
+  const tz = String(params && params.tz || '+07:00').trim();
+  const question = String(params && params.question || '').trim();
+  const customerName = String(params && params.customerName || '').trim();
+  const triggerSource = String(params && params.triggerSource || 'luan');
+
+  if (!convId || !serial) {
+    throw new Error('Thiếu mã hội thoại hoặc số Seri để lập quẻ');
+  }
+
+  const cache = CacheService.getScriptCache();
+  const runCacheKey = 'run_' + convId + '_' + serial;
+  const existingRun = cache.get(runCacheKey);
+  if (existingRun) {
+    try {
+      const parsedRun = JSON.parse(existingRun);
+      if (parsedRun && parsedRun.startTime && (Date.now() - parsedRun.startTime < 240000)) {
+        return { started: false, alreadyRunning: true, runningInfo: parsedRun };
+      }
+    } catch (e) {}
+  }
+
+  cache.put(runCacheKey, JSON.stringify({
+    startTime: Date.now(),
+    triggerSource: triggerSource,
+    customerName: customerName,
+    serial: serial
+  }), 300);
+
+  let copyText = '';
+  try {
+    const settings = getMobileSettings_();
+    let baseUrl = String(settings.luchaoUrl || 'https://dshc-luc-hao.vercel.app/').trim();
+    if (!baseUrl.endsWith('/')) baseUrl += '/';
+
+    // 1. Gọi API Lập Quẻ
+    let apiUrl = baseUrl + 'api/lap-que?serial=' + encodeURIComponent(serial) + '&tz=' + encodeURIComponent(tz);
+    if (dateObj && dateObj.year) {
+      const p2 = function(n) { return String(n).padStart(2, '0'); };
+      apiUrl += '&sa_date=' + dateObj.year + '-' + p2(dateObj.month) + '-' + p2(dateObj.day)
+        + '&sa_hour=' + dateObj.hour + '&sa_minute=' + dateObj.min;
+    }
+
+    const lqRes = UrlFetchApp.fetch(apiUrl, { method: 'get', muteHttpExceptions: true });
+    if (lqRes.getResponseCode() < 200 || lqRes.getResponseCode() >= 300) {
+      throw new Error('Lỗi kết nối Lập quẻ (' + lqRes.getResponseCode() + ')');
+    }
+    const lapQueData = JSON.parse(lqRes.getContentText() || '{}');
+    if (!lapQueData.success || !lapQueData.copyText) {
+      throw new Error(lapQueData.error || 'Không thể lập quẻ.');
+    }
+    copyText = lapQueData.copyText;
+
+    // 2. Tải kinh-dich.md & đọc Hồ sơ ngữ cảnh trên Sheet
+    const mdContent = fetchTextWithCacheServer_(baseUrl + 'kinh-dich.md', 'CACHE_KINH_DICH_MD_V1');
+    const historyContext = buildHistoryContextFromSheet_(convId);
+
+    const systemPrompt = mdContent ? ('---\nKiến thức tham khảo:\n' + mdContent) : '';
+    const userPrompt = copyText + (question ? (' ' + question) : '') + historyContext;
+
+    const aiTemp = parseOptionalNumber_(settings.aiTemperature);
+    const aiTopP = parseOptionalNumber_(settings.aiTopP);
+    const rwTemp = parseOptionalNumber_(settings.rewriteTemperature);
+    const rwTopP = parseOptionalNumber_(settings.rewriteTopP);
+
+    const resCacheKey = 'res_' + convId + '_' + triggerSource + '_' + serial;
+
+    try {
+      let aiResult = '';
+      let usedModelName = '';
+
+      if (triggerSource === 'chu') {
+        usedModelName = settings.customAiModel || 'Model Phụ';
+        aiResult = callOpenAICompatibleServer_(
+          settings.customAiBaseUrl,
+          settings.customAiModel,
+          settings.customAiApiKey,
+          userPrompt,
+          systemPrompt,
+          aiTemp,
+          aiTopP
+        );
+      } else {
+        usedModelName = settings.geminiModel || 'gemini-3.5-flash-lite';
+        if (settings.geminiBaseUrl && String(settings.geminiBaseUrl).trim()) {
+          aiResult = callOpenAICompatibleServer_(
+            settings.geminiBaseUrl,
+            usedModelName,
+            settings.geminiApiKey,
+            userPrompt,
+            systemPrompt,
+            aiTemp,
+            aiTopP
+          );
+        } else {
+          const payload = {
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ parts: [{ text: userPrompt }] }]
+          };
+          const genConfig = {};
+          if (aiTemp !== null) genConfig.temperature = aiTemp;
+          if (aiTopP !== null) genConfig.topP = aiTopP;
+          if (Object.keys(genConfig).length > 0) payload.generationConfig = genConfig;
+
+          const json = callGeminiRawServer_(usedModelName, settings.geminiApiKey, payload);
+          aiResult = (json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text || '').trim();
+        }
+      }
+
+      if (!aiResult || aiResult.length <= 10) {
+        throw new Error('AI trả về kết quả rỗng');
+      }
+
+      // Cắt bỏ [TÓM_TẮT] nếu model lỡ tự viết thêm
+      aiResult = aiResult.replace(/(?:\n+[-—~*_]*)*\s*(?:\n+\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?[\s\S]*)$/i, '').trim();
+
+      // BƯỚC 2: VIẾT LẠI THEO PHONG CÁCH THỰC TẾ (viet-lai.md)
+      const vietLaiPrompt = fetchTextWithCacheServer_(baseUrl + 'viet-lai.md', 'CACHE_VIET_LAI_MD_V1');
+      const rwModel = String(settings.rewriteModel || 'gemini-3.5-flash-lite').trim();
+      const rwKey = String(settings.rewriteApiKey || '').trim() || (settings.rewriteType === 'openai_compatible' ? '' : String(settings.geminiApiKey || '').trim());
+
+      let rewrittenResult = null;
+      if (vietLaiPrompt && rwKey) {
+        try {
+          if (settings.rewriteType === 'openai_compatible' && settings.rewriteBaseUrl) {
+            const textRw = callOpenAICompatibleServer_(
+              settings.rewriteBaseUrl,
+              rwModel,
+              rwKey,
+              aiResult,
+              vietLaiPrompt,
+              rwTemp,
+              rwTopP
+            );
+            if (textRw && textRw.length > 20) rewrittenResult = textRw;
+          } else {
+            const rwPayload = {
+              systemInstruction: { parts: [{ text: vietLaiPrompt }] },
+              contents: [{ parts: [{ text: aiResult }] }]
+            };
+            const rwConfig = {};
+            if (rwTemp !== null) rwConfig.temperature = rwTemp;
+            if (rwTopP !== null) rwConfig.topP = rwTopP;
+            if (Object.keys(rwConfig).length > 0) rwPayload.generationConfig = rwConfig;
+
+            const rwJson = callGeminiRawServer_(rwModel, rwKey, rwPayload);
+            const textRw = (rwJson && rwJson.candidates && rwJson.candidates[0] && rwJson.candidates[0].content && rwJson.candidates[0].content.parts && rwJson.candidates[0].content.parts[0] && rwJson.candidates[0].content.parts[0].text || '').trim();
+            if (textRw && textRw.length > 20) rewrittenResult = textRw;
+          }
+        } catch (rwErr) {
+          Logger.log('⚠️ Viết lại gặp sự cố, fallback bài gốc Bước 1: ' + rwErr.message);
+        }
+      }
+
+      let resultObj;
+      if (rewrittenResult) {
+        resultObj = {
+          success: true,
+          type: 'business',
+          content: rewrittenResult,
+          rawContent: aiResult,
+          model: rwModel,
+          triggerSource: triggerSource,
+          serial: serial,
+          convId: convId,
+          savedAt: Date.now()
+        };
+      } else {
+        resultObj = {
+          success: true,
+          type: 'claude',
+          content: aiResult,
+          model: usedModelName,
+          triggerSource: triggerSource,
+          serial: serial,
+          convId: convId,
+          savedAt: Date.now()
+        };
+      }
+
+      const serialized = JSON.stringify(resultObj);
+      if (serialized.length < 95000) {
+        try { cache.put(resCacheKey, serialized, 21600); } catch (eC) {}
+      }
+      return resultObj;
+    } catch (aiErr) {
+      // BƯỚC 1 LỖI -> FALLBACK QUẺ THÔ MÀU CAM (GEMINI)
+      Logger.log('⚠️ Luận Bước 1 lỗi, fallback quẻ thô: ' + aiErr.message);
+      const fallbackObj = {
+        success: true,
+        type: 'gemini',
+        content: copyText,
+        errorReason: aiErr && aiErr.message ? aiErr.message : '',
+        triggerSource: triggerSource,
+        serial: serial,
+        convId: convId,
+        savedAt: Date.now()
+      };
+      const serializedFb = JSON.stringify(fallbackObj);
+      if (serializedFb.length < 95000) {
+        try { cache.put(resCacheKey, serializedFb, 21600); } catch (eC2) {}
+      }
+      return fallbackObj;
+    }
+  } finally {
+    cache.remove(runCacheKey);
+  }
+}
+
+// ===================================================================
+// 7. CÁC HÀM ĐƯỢC WEB MOBILE GỌI TRỰC TIẾP QUA google.script.run
+// ===================================================================
+function getWebAppUrlSafe_() {
+  const settings = getMobileSettings_();
+  if (settings && settings.selfUrl && String(settings.selfUrl).indexOf('script.google.com') !== -1) {
+    return String(settings.selfUrl).trim();
+  }
+  try {
+    const svcUrl = ScriptApp.getService().getUrl();
+    if (svcUrl && svcUrl.indexOf('script.google.com') !== -1) {
+      return svcUrl;
+    }
+  } catch (e) {}
+  return MOB_DEFAULT_SETTINGS.selfUrl;
+}
+
+function pullStateFromBdsd_() {
+  const settings = getMobileSettings_();
+  const bdsdUrl = String(settings.bdsdUrl || '').trim();
+  if (!bdsdUrl) return null;
+
+  try {
+    const myUrl = getWebAppUrlSafe_();
+    const res = UrlFetchApp.fetch(bdsdUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        action: myUrl ? 'register_context_url' : 'get_mobile_state',
+        url: myUrl
+      }),
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() >= 200 && res.getResponseCode() < 300) {
+      const data = JSON.parse(res.getContentText() || '{}');
+      if (data && data.success) {
+        if (data.sapoToken || data.tenant) {
+          saveMobileSapoAuth_(data.sapoToken, data.tenant);
+        }
+        return data;
+      }
+    }
+  } catch (e) {
+    Logger.log('⚠️ Lỗi kéo trạng thái từ BDSD: ' + e.message);
+  }
+  return null;
+}
+
+function mobileGetDashboardState(serialByConvMap) {
+  const indexList = readMobileCustIndex_();
+  const cache = CacheService.getScriptCache();
+  const customers = [];
+
+  indexList.forEach(function(idxItem) {
+    const cust = getMobileCustomer_(idxItem.convId);
+    if (!cust) return;
+
+    // Kiểm tra trạng thái chạy AI và kết quả tạm đang nằm trong CacheService (khi thoát/mở lại trình duyệt)
+    const activeRuns = {};
+    const cachedResults = {};
+    const serialHint = serialByConvMap && serialByConvMap[cust.convId] ? String(serialByConvMap[cust.convId]).trim() : '';
+    const checkSerials = [];
+    if (serialHint) checkSerials.push(serialHint);
+    if (Array.isArray(cust.detectedSerials)) {
+      cust.detectedSerials.forEach(function(s) {
+        if (s && checkSerials.indexOf(s) === -1) checkSerials.push(s);
+      });
+    }
+
+    if (checkSerials.length > 0) {
+      const runKeys = checkSerials.map(function(s) { return 'run_' + cust.convId + '_' + s; });
+      const resKeys = [];
+      checkSerials.forEach(function(s) {
+        resKeys.push('res_' + cust.convId + '_luan_' + s);
+        resKeys.push('res_' + cust.convId + '_chu_' + s);
+      });
+      try {
+        const runHits = cache.getAll(runKeys);
+        Object.keys(runHits).forEach(function(k) {
+          if (!runHits[k]) return;
+          try {
+            const parsed = JSON.parse(runHits[k]);
+            if (parsed && parsed.startTime && (Date.now() - parsed.startTime < 240000)) {
+              activeRuns[parsed.serial] = parsed;
+            }
+          } catch (eR) {}
+        });
+        const resHits = cache.getAll(resKeys);
+        Object.keys(resHits).forEach(function(k) {
+          if (!resHits[k]) return;
+          try {
+            const parsedRes = JSON.parse(resHits[k]);
+            if (parsedRes && parsedRes.content) {
+              cachedResults[parsedRes.triggerSource + '_' + parsedRes.serial] = parsedRes;
+            }
+          } catch (eRes) {}
+        });
+      } catch (eCache) {}
+    }
+
+    cust.activeRuns = activeRuns;
+    cust.cachedResults = cachedResults;
+    customers.push(cust);
+  });
+
+  const settings = getMobileSettings_();
+  return {
+    success: true,
+    webAppUrl: getWebAppUrlSafe_(),
+    hasSapoToken: !!getMobileSapoToken_(),
+    settings: settings,
+    customers: customers
+  };
+}
+
+function mobileSyncWithBdsd() {
+  const bdsdData = pullStateFromBdsd_();
+  if (bdsdData && Array.isArray(bdsdData.taggedCustomers)) {
+    const taggedMap = {};
+    bdsdData.taggedCustomers.forEach(function(tc) {
+      if (tc && tc.convId) taggedMap[String(tc.convId)] = true;
+    });
+    const toRemove = readMobileCustIndex_()
+      .map(function(it) { return it.convId; })
+      .filter(function(cid) { return !taggedMap[cid]; });
+    const needInitialIds = applyTaggedCustomerSyncList_(bdsdData.taggedCustomers, toRemove);
+    // Chỉ quét 1 lần trang đầu (Sapo 20 tin) để lọc Seri & 5 tin cuối, tuyệt đối không tự gọi AI
+    for (let i = 0; i < needInitialIds.length; i++) {
+      try { fetchInitialRecentMessagesOnce_(needInitialIds[i]); } catch (e) {}
+    }
+  }
+  return mobileGetDashboardState({});
+}
+
+function mobileProcessPendingQueue() {
+  const indexList = readMobileCustIndex_();
+  for (let i = 0; i < indexList.length; i++) {
+    const cust = getMobileCustomer_(indexList[i].convId);
+    if (cust && !cust.initialScanned) {
+      fetchInitialRecentMessagesOnce_(cust.convId);
+    }
+  }
+  return mobileGetDashboardState({});
+}
+
+function mobileSaveSettings(newSettings) {
+  const saved = saveMobileSettings_(newSettings);
+  if (saved.bdsdUrl) {
+    pullStateFromBdsd_();
+  }
+  return {
+    success: true,
+    settings: saved,
+    hasSapoToken: !!getMobileSapoToken_(),
+    webAppUrl: getWebAppUrlSafe_()
+  };
+}
+
+function mobileBuildContext(convId) {
+  const cust = buildCustomerContextOnServer_(convId);
+  const sheetRes = readConvProfileFromSheet_(convId);
+  return {
+    success: true,
+    customer: cust,
+    profileText: (sheetRes.summaries || []).map(function(s) { return typeof s === 'string' ? s : s.text; }).join('\n\n')
+  };
+}
+
+function mobileReadProfile(convId) {
+  const res = readConvProfileFromSheet_(convId);
+  const text = (res.summaries || []).map(function(s) {
+    const t = typeof s === 'string' ? s : (s && s.text || '');
+    return t;
+  }).filter(Boolean).join('\n\n');
+  return {
+    success: true,
+    profileText: text,
+    updatedAt: res.updatedAt || ''
+  };
+}
+
+function mobileClearContext(convId) {
+  const cid = String(convId || '').trim();
+  if (!cid) throw new Error('Thiếu convId');
+  deleteConvProfileFromSheet_(cid);
+  const cust = getMobileCustomer_(cid);
+  if (cust) {
+    cust.ctxStatus = 'done';
+    cust.ctxType = 'cleared';
+    cust.ctxTime = '';
+    cust.ctxError = '';
+    cust.unlocked = true;
+    saveMobileCustomer_(cust);
+  }
+  return { success: true, customer: cust };
+}
+
+function mobileRunDivination(params) {
+  return runMobileDivinationServer_(params);
+}
+
+function mobileClearResultCache(convId, triggerSource, serial) {
+  const cache = CacheService.getScriptCache();
+  cache.remove('res_' + convId + '_' + triggerSource + '_' + serial);
+  return { success: true };
+}
+
+// ===================================================================
+// 8. GIAO DIỆN WEB MOBILE (Dark Slate Mobile-First, Bố cục 4 Tầng)
+// ===================================================================
+function getMobileWebHtml_(initialStateJson) {
+  const initJson = initialStateJson || 'null';
+  return [
+'<!DOCTYPE html>',
+'<html lang="vi">',
+'<head>',
+'  <meta charset="UTF-8">',
+'  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">',
+'  <title>Kinh Dịch Mobile</title>',
+'  <style>',
+'    :root {',
+'      --bg-canvas: #0b1120;',
+'      --bg-card: #131c2e;',
+'      --bg-elevated: #1b273d;',
+'      --bg-input: #0f172a;',
+'      --border-subtle: rgba(148, 163, 184, 0.16);',
+'      --border-focus: #38bdf8;',
+'      --text-primary: #f8fafc;',
+'      --text-secondary: #94a3b8;',
+'      --text-muted: #64748b;',
+'      --emerald: #059669;',
+'      --emerald-hover: #047857;',
+'      --purple: #7c3aed;',
+'      --purple-soft: rgba(124, 58, 237, 0.18);',
+'      --blue: #0084ff;',
+'      --green: #16a34a;',
+'      --amber: #d97706;',
+'      --danger: #ef4444;',
+'    }',
+'    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }',
+'    html, body {',
+'      margin: 0; padding: 0; background: var(--bg-canvas); color: var(--text-primary);',
+'      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;',
+'      font-size: 15px; line-height: 1.45; min-height: 100vh;',
+'    }',
+'    button, input, select, textarea { font-family: inherit; }',
+'    .app-shell { max-width: 560px; margin: 0 auto; padding-bottom: 108px; }',
+'',
+'    /* Header */',
+'    .top-header {',
+'      position: sticky; top: 0; z-index: 40;',
+'      background: rgba(11, 17, 32, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);',
+'      border-bottom: 1px solid var(--border-subtle);',
+'      padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;',
+'    }',
+'    .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }',
+'    .brand-dot {',
+'      width: 9px; height: 9px; border-radius: 50%; background: #22c55e;',
+'      box-shadow: 0 0 8px rgba(34, 197, 94, 0.7); flex-shrink: 0;',
+'    }',
+'    .brand-dot.warn { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.7); }',
+'    .header-actions { display: flex; align-items: center; gap: 8px; }',
+'    .icon-btn {',
+'      height: 40px; min-width: 40px; padding: 0 12px; border-radius: 10px;',
+'      border: 1px solid var(--border-subtle); background: var(--bg-elevated);',
+'      color: var(--text-primary); font-size: 14px; font-weight: 600;',
+'      display: inline-flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer;',
+'    }',
+'    .icon-btn:active { transform: scale(0.96); }',
+'    .icon-btn.spinning { opacity: 0.6; pointer-events: none; }',
+'',
+'    /* Tầng 1: Thanh danh sách khách hàng */',
+'    .customer-strip-wrap {',
+'      padding: 10px 14px 8px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-canvas);',
+'    }',
+'    .strip-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }',
+'    .customer-strip {',
+'      display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;',
+'      scrollbar-width: none; -ms-overflow-style: none;',
+'    }',
+'    .customer-strip::-webkit-scrollbar { display: none; }',
+'    .cust-pill {',
+'      flex: 0 0 auto; display: flex; align-items: center; gap: 8px;',
+'      padding: 7px 12px 7px 8px; border-radius: 999px;',
+'      background: var(--bg-card); border: 1px solid var(--border-subtle);',
+'      color: var(--text-primary); cursor: pointer; transition: all 0.15s ease;',
+'      max-width: 220px;',
+'    }',
+'    .cust-pill.active {',
+'      background: rgba(5, 150, 105, 0.16); border-color: #10b981;',
+'      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35);',
+'    }',
+'    .cust-avatar {',
+'      width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0;',
+'      background: #2563eb; color: #fff; font-weight: 700; font-size: 12px;',
+'      display: flex; align-items: center; justify-content: center; overflow: hidden;',
+'    }',
+'    .cust-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }',
+'    .cust-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 135px; }',
+'    .status-badge { font-size: 11px; flex-shrink: 0; }',
+'',
+'    /* Card & Sections */',
+'    .main-pad { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }',
+'    .card {',
+'      background: var(--bg-card); border: 1px solid var(--border-subtle);',
+'      border-radius: 14px; padding: 13px;',
+'    }',
+'    .section-label {',
+'      font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;',
+'      color: var(--text-secondary); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;',
+'    }',
+'',
+'    /* Tầng 2: Hồ sơ ngữ cảnh */',
+'    .ctx-row { display: flex; gap: 8px; align-items: stretch; }',
+'    .btn-ctx-main {',
+'      flex: 1; height: 46px; border-radius: 11px; border: 1px solid var(--border-subtle);',
+'      background: var(--bg-elevated); color: var(--text-primary);',
+'      font-size: 14px; font-weight: 700; cursor: pointer;',
+'      display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px;',
+'      transition: all 0.15s ease;',
+'    }',
+'    .btn-ctx-main.done {',
+'      background: linear-gradient(135deg, #6d28d9, #7c3aed);',
+'      border-color: rgba(167, 139, 250, 0.45); color: #fff;',
+'      box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);',
+'    }',
+'    .btn-ctx-main.error { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }',
+'    .btn-ctx-main.running { opacity: 0.85; cursor: wait; border-color: rgba(245, 158, 11, 0.45); color: #fde68a; }',
+'    .btn-ctx-reset {',
+'      width: 46px; height: 46px; flex-shrink: 0; border-radius: 11px;',
+'      border: 1px solid var(--border-subtle); background: var(--bg-elevated);',
+'      color: var(--text-primary); font-size: 17px; cursor: pointer;',
+'      display: flex; align-items: center; justify-content: center;',
+'    }',
+'    .btn-ctx-reset:disabled { opacity: 0.45; cursor: not-allowed; }',
+'    .ctx-pulse { animation: pulseGlow 1.1s ease-in-out 2; }',
+'    @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(167,139,250,0); } 50% { box-shadow: 0 0 0 5px rgba(167,139,250,0.55); } }',
+'    .ctx-subnote { margin-top: 7px; font-size: 12px; color: var(--text-secondary); }',
+'    .ctx-subnote.err { color: #f87171; }',
+'',
+'    /* Tầng 3: Seri, Ngày giờ & Tin nhắn câu hỏi */',
+'    .serial-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }',
+'    .chip-btn {',
+'      padding: 6px 11px; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.35);',
+'      background: rgba(56, 189, 248, 0.1); color: #7dd3fc;',
+'      font-size: 13.5px; font-weight: 700; cursor: pointer;',
+'    }',
+'    .chip-btn.selected { background: #0284c7; color: #fff; border-color: #38bdf8; }',
+'    .input-wrap { position: relative; display: flex; align-items: center; }',
+'    .form-input, .form-select, .form-textarea {',
+'      width: 100%; background: var(--bg-input); color: var(--text-primary);',
+'      border: 1px solid var(--border-subtle); border-radius: 10px;',
+'      padding: 11px 12px; font-size: 16px; outline: none;',
+'      transition: border-color 0.15s ease;',
+'    }',
+'    .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--border-focus); }',
+'    .clear-inline-btn {',
+'      position: absolute; right: 8px; background: var(--bg-elevated); color: var(--text-secondary);',
+'      border: none; border-radius: 7px; padding: 5px 9px; font-size: 12px; font-weight: 600; cursor: pointer;',
+'    }',
+'    .dt-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 8px; margin-top: 10px; }',
+'    .form-select { padding: 11px 8px; font-size: 14.5px; }',
+'',
+'    .recent-msgs-box {',
+'      margin-top: 12px; margin-bottom: 10px;',
+'      max-height: 185px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;',
+'    }',
+'    .msg-bubble-item {',
+'      width: 100%; text-align: left; padding: 9px 11px; border-radius: 10px;',
+'      background: var(--bg-elevated); border: 1px solid var(--border-subtle);',
+'      color: var(--text-primary); font-size: 13.5px; line-height: 1.38; cursor: pointer;',
+'      display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;',
+'    }',
+'    .msg-bubble-item:active { background: #263652; border-color: #38bdf8; }',
+'    .msg-bubble-text { flex: 1; white-space: pre-wrap; word-break: break-word; }',
+'    .msg-bubble-time { font-size: 11px; color: var(--text-muted); flex-shrink: 0; margin-top: 2px; }',
+'    .link-clear-btn {',
+'      background: transparent; border: none; color: #38bdf8; font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 6px;',
+'    }',
+'    .form-textarea { min-height: 90px; resize: vertical; line-height: 1.45; }',
+'',
+'    /* Tầng 4: Thanh Luận Quẻ Cố Định Dưới Đáy */',
+'    .bottom-dock {',
+'      position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;',
+'      background: rgba(11, 17, 32, 0.95); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);',
+'      border-top: 1px solid var(--border-subtle); padding: 10px 14px calc(10px + env(safe-area-inset-bottom));',
+'    }',
+'    .dock-inner { max-width: 532px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }',
+'    .btn-ai {',
+'      height: 50px; border-radius: 12px; border: none;',
+'      background: var(--emerald); color: #fff; font-size: 15.5px; font-weight: 700;',
+'      cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;',
+'      box-shadow: 0 3px 10px rgba(5, 150, 105, 0.3); transition: all 0.15s ease;',
+'    }',
+'    .btn-ai:active { transform: scale(0.98); }',
+'    .btn-ai.locked { opacity: 0.48; filter: grayscale(0.25); }',
+'    .btn-ai:disabled:not(.locked) { opacity: 0.5; cursor: not-allowed; }',
+'    .btn-ai.copy-business { background: linear-gradient(135deg, #0084ff, #00c6ff); box-shadow: 0 0 16px rgba(0, 132, 255, 0.5); }',
+'    .btn-ai.copy-claude { background: linear-gradient(135deg, #22c55e, #16a34a); box-shadow: 0 0 16px rgba(34, 197, 94, 0.5); }',
+'    .btn-ai.copy-gemini { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 0 16px rgba(245, 158, 11, 0.5); }',
+'',
+'    /* Empty State */',
+'    .empty-card { text-align: center; padding: 34px 18px; color: var(--text-secondary); }',
+'    .empty-icon { font-size: 38px; margin-bottom: 10px; }',
+'    .empty-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }',
+'',
+'    /* Modals */',
+'    .modal-backdrop {',
+'      position: fixed; inset: 0; z-index: 60; background: rgba(2, 6, 23, 0.78);',
+'      display: none; align-items: flex-end; justify-content: center;',
+'    }',
+'    .modal-backdrop.open { display: flex; }',
+'    .modal-sheet {',
+'      width: 100%; max-width: 560px; max-height: 88vh; background: var(--bg-card);',
+'      border-top-left-radius: 18px; border-top-right-radius: 18px;',
+'      border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; overflow: hidden;',
+'    }',
+'    .modal-head {',
+'      padding: 14px 16px; border-bottom: 1px solid var(--border-subtle);',
+'      display: flex; align-items: center; justify-content: space-between;',
+'    }',
+'    .modal-title { font-size: 16px; font-weight: 700; }',
+'    .modal-close {',
+'      width: 34px; height: 34px; border-radius: 9px; border: none;',
+'      background: var(--bg-elevated); color: var(--text-primary); font-size: 18px; cursor: pointer;',
+'    }',
+'    .modal-body { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }',
+'    .modal-foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border-subtle); display: flex; gap: 10px; }',
+'    .btn-primary-full {',
+'      flex: 1; height: 46px; border-radius: 11px; border: none; background: var(--emerald);',
+'      color: #fff; font-size: 15px; font-weight: 700; cursor: pointer;',
+'    }',
+'    .btn-secondary-full {',
+'      flex: 1; height: 46px; border-radius: 11px; border: 1px solid var(--border-subtle);',
+'      background: var(--bg-elevated); color: var(--text-primary); font-size: 14px; font-weight: 600; cursor: pointer;',
+'    }',
+'    .field-group label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; }',
+'    .hint-sm { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }',
+'    .settings-box { background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }',
+'    .settings-box-title { font-size: 13px; font-weight: 700; color: #38bdf8; }',
+'    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }',
+'    .preset-pills { display: flex; flex-wrap: wrap; gap: 6px; }',
+'    .preset-pill {',
+'      padding: 5px 9px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer;',
+'      border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-secondary);',
+'    }',
+'    .profile-pre {',
+'      white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.55;',
+'      background: var(--bg-input); padding: 12px; border-radius: 10px; border: 1px solid var(--border-subtle);',
+'      margin: 0; max-height: 55vh; overflow-y: auto;',
+'    }',
+'',
+'    /* Toast */',
+'    .toast-bar {',
+'      position: fixed; top: 62px; left: 50%; transform: translateX(-50%); z-index: 90;',
+'      max-width: calc(100% - 28px); padding: 10px 14px; border-radius: 10px;',
+'      font-size: 13.5px; font-weight: 600; color: #fff; background: #1e293b;',
+'      border: 1px solid rgba(148,163,184,0.3); box-shadow: 0 8px 24px rgba(0,0,0,0.45);',
+'      display: none; text-align: center;',
+'    }',
+'    .toast-bar.show { display: block; }',
+'    .toast-bar.success { background: #065f46; border-color: #10b981; }',
+'    .toast-bar.error { background: #7f1d1d; border-color: #ef4444; }',
+'    .toast-bar.warning { background: #78350f; border-color: #f59e0b; }',
+'  </style>',
+'</head>',
+'<body>',
+'  <div class="toast-bar" id="toastBar"></div>',
+'',
+'  <div class="app-shell">',
+'    <!-- HEADER -->',
+'    <header class="top-header">',
+'      <div class="brand">',
+'        <span class="brand-dot" id="connDot" title="Trạng thái Token Sapo"></span>',
+'        <span>🔮 Kinh Dịch Mobile</span>',
+'      </div>',
+'      <div class="header-actions">',
+'        <button type="button" class="icon-btn" id="btnRefresh" title="Làm mới danh sách khách">🔄 Làm mới</button>',
+'        <button type="button" class="icon-btn" id="btnOpenSettings" title="Cài đặt Web Mobile">⚙️</button>',
+'      </div>',
+'    </header>',
+'',
+'    <!-- TẦNG 1: THANH CHỌN KHÁCH HÀNG -->',
+'    <section class="customer-strip-wrap">',
+'      <div class="strip-meta">',
+'        <span id="custCountLabel">Khách đang gắn nhãn Mobile (0)</span>',
+'        <span id="tokenStatusText">Đang kiểm tra kết nối...</span>',
+'      </div>',
+'      <div class="customer-strip" id="customerStrip"></div>',
+'    </section>',
+'',
+'    <!-- NỘI DUNG CHÍNH -->',
+'    <main class="main-pad" id="mainWorkspace" style="display:none;">',
+'      <!-- TẦNG 2: HỒ SƠ NGỮ CẢNH -->',
+'      <section class="card">',
+'        <div class="section-label">',
+'          <span>📋 Hồ sơ ngữ cảnh khách hàng</span>',
+'          <span id="ctxTimeBadge"></span>',
+'        </div>',
+'        <div class="ctx-row">',
+'          <button type="button" class="btn-ctx-main" id="btnCtxMain">📋 Hồ sơ</button>',
+'          <button type="button" class="btn-ctx-reset" id="btnCtxReset" title="Xóa ngữ cảnh cũ (hoặc bỏ qua lấy HS) & mở khóa Gemini/Khác">🔄</button>',
+'        </div>',
+'        <div class="ctx-subnote" id="ctxSubnote"></div>',
+'      </section>',
+'',
+'      <!-- TẦNG 3: SỐ SERI, NGÀY GIỜ & CÂU HỎI -->',
+'      <section class="card">',
+'        <div class="section-label">',
+'          <span>🔢 Số Seri & Thời gian lập quẻ</span>',
+'        </div>',
+'        <div class="serial-chips" id="serialChipsRow" style="display:none;"></div>',
+'        <div class="input-wrap">',
+'          <input type="text" inputmode="numeric" class="form-input" id="serialInput" placeholder="Nhập số Seri (VD: 16122068)..." style="padding-right: 54px;">',
+'          <button type="button" class="clear-inline-btn" id="btnClearSerial">✕</button>',
+'        </div>',
+'        <div class="dt-grid">',
+'          <input type="datetime-local" class="form-input" id="dtInput" style="font-size:14.5px;padding:10px 8px;">',
+'          <select class="form-select" id="tzSelect"></select>',
+'        </div>',
+'',
+'        <div class="section-label" style="margin-top:14px;">',
+'          <span>💬 Câu hỏi (Chạm tin bên dưới để ghép nối tiếp)</span>',
+'          <button type="button" class="link-clear-btn" id="btnClearQuestion">✕ Xóa trắng</button>',
+'        </div>',
+'        <div class="recent-msgs-box" id="recentMsgsBox"></div>',
+'        <textarea class="form-textarea" id="questionInput" rows="3" placeholder="Chạm vào tin nhắn ở trên để nối câu hoặc tự nhập câu hỏi..."></textarea>',
+'      </section>',
+'    </main>',
+'',
+'    <!-- TRẠNG THÁI TRỐNG -->',
+'    <main class="main-pad" id="emptyWorkspace">',
+'      <div class="card empty-card">',
+'        <div class="empty-icon">📱</div>',
+'        <div class="empty-title">Chưa có khách nào gắn nhãn "Mobile"</div>',
+'        <p style="margin:0 0 12px;font-size:13.5px;">',
+'          1. Mở app Sapo trên điện thoại và gắn nhãn <b>Mobile</b> (màu tím) cho khách cần xem.<br>',
+'          2. Chờ tối đa 1 phút (hoặc bấm <b>🔄 Làm mới</b> ở góc trên) — khách sẽ tự hiện ở đây cùng Số Seri &amp; 5 tin cuối (không tự gọi AI).<br>',
+'          3. Khi cần làm việc, bấm nút <b>📋 Hồ sơ</b> để tổng hợp ngữ cảnh (hoặc bấm <b>🔄</b> bỏ qua), sau đó gỡ nhãn trên Sapo để tự xóa khách.',
+'        </p>',
+'        <button type="button" class="icon-btn" id="btnEmptyOpenSettings" style="margin:0 auto;">⚙️ Kiểm tra Cài đặt & Link BDSD</button>',
+'      </div>',
+'    </main>',
+'  </div>',
+'',
+'  <!-- TẦNG 4: DOCK 2 NÚT LUẬN QUẺ -->',
+'  <div class="bottom-dock" id="bottomDock" style="display:none;">',
+'    <div class="dock-inner">',
+'      <button type="button" class="btn-ai" id="btnGemini">Gemini</button>',
+'      <button type="button" class="btn-ai" id="btnKhac">Khác</button>',
+'    </div>',
+'  </div>',
+'',
+'  <!-- MODAL XEM HỒ SƠ -->',
+'  <div class="modal-backdrop" id="profileModal">',
+'    <div class="modal-sheet">',
+'      <div class="modal-head">',
+'        <span class="modal-title" id="profileModalTitle">📋 Hồ sơ ngữ cảnh</span>',
+'        <button type="button" class="modal-close" id="btnCloseProfileModal">×</button>',
+'      </div>',
+'      <div class="modal-body">',
+'        <pre class="profile-pre" id="profileModalText">Đang tải...</pre>',
+'      </div>',
+'      <div class="modal-foot">',
+'        <button type="button" class="btn-secondary-full" id="btnRebuildProfile">🔄 Tổng hợp lại HS</button>',
+'        <button type="button" class="btn-primary-full" id="btnCopyProfile">📋 Copy Hồ sơ</button>',
+'      </div>',
+'    </div>',
+'  </div>',
+'',
+'  <!-- MODAL COPY THỦ CÔNG (FALLBACK NẾU TRÌNH DUYỆT CHẶN CLIPBOARD) -->',
+'  <div class="modal-backdrop" id="manualCopyModal">',
+'    <div class="modal-sheet">',
+'      <div class="modal-head">',
+'        <span class="modal-title">📋 Copy nội dung bài luận</span>',
+'        <button type="button" class="modal-close" id="btnCloseManualCopy">×</button>',
+'      </div>',
+'      <div class="modal-body">',
+'        <div class="hint-sm" style="color:#fde68a;margin-top:0;">Trình duyệt điện thoại chặn tự động copy, bạn bấm <b>Chọn tất cả &amp; Copy</b> bên dưới nhé:</div>',
+'        <textarea class="form-textarea" id="manualCopyTextarea" rows="10" readonly></textarea>',
+'      </div>',
+'      <div class="modal-foot">',
+'        <button type="button" class="btn-primary-full" id="btnSelectAndCopyManual">✅ Chọn tất cả &amp; Copy</button>',
+'      </div>',
+'    </div>',
+'  </div>',
+'',
+'  <!-- MODAL CÀI ĐẶT -->',
+'  <div class="modal-backdrop" id="settingsModal">',
+'    <div class="modal-sheet">',
+'      <div class="modal-head">',
+'        <span class="modal-title">⚙️ Cài đặt Web Mobile</span>',
+'        <button type="button" class="modal-close" id="btnCloseSettings">×</button>',
+'      </div>',
+'      <div class="modal-body">',
+'        <div class="settings-box">',
+'          <div class="settings-box-title">🔗 Kết nối BDSD &amp; Lập Quẻ</div>',
+'          <div class="field-group">',
+'            <label>Link Web App project BDSD (/exec)</label>',
+'            <input type="url" class="form-input" id="setBdsdUrl" placeholder="https://script.google.com/macros/s/.../exec">',
+'            <div class="hint-sm">Dán link Web App của BDSD vào đây và bấm Lưu để 2 bên tự kết nối &amp; lấy Token Sapo ngay.</div>',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Link Web Mobile hiện tại (ex-ngucanhquedich /exec)</label>',
+'            <input type="url" class="form-input" id="setSelfUrl" placeholder="https://script.google.com/macros/s/.../exec" style="font-size:13px;">',
+'            <div class="hint-sm">Dùng để đồng bộ 2 chiều với BDSD và dự phòng kết nối API.</div>',
+'          </div>',
+'          <div class="field-group">',
+'            <label>URL Trang Lập Quẻ Lục Hào</label>',
+'            <input type="url" class="form-input" id="setLuchaoUrl" placeholder="https://dshc-luc-hao.vercel.app/">',
+'          </div>',
+'        </div>',
+'',
+'        <div class="settings-box">',
+'          <div class="settings-box-title">🤖 Gemini AI (Nút Gemini &amp; Tạo Hồ Sơ)</div>',
+'          <div class="field-group">',
+'            <label>Gemini API Key</label>',
+'            <input type="password" class="form-input" id="setGeminiApiKey" placeholder="AIzaSy...">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Model Gemini</label>',
+'            <select class="form-select" id="setGeminiModelSelect">',
+'              <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>',
+'              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>',
+'              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>',
+'              <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>',
+'              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>',
+'              <option value="gemini-3-flash">Gemini 3 Flash</option>',
+'              <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>',
+'              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>',
+'              <option value="__custom__">✏️ Tự nhập mã model khác...</option>',
+'            </select>',
+'            <input type="text" class="form-input" id="setGeminiModelCustom" placeholder="Nhập mã model..." style="margin-top:6px;display:none;">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Base URL tùy chỉnh (Để trống = Gemini API gốc)</label>',
+'            <input type="url" class="form-input" id="setGeminiBaseUrl" placeholder="Để trống nếu dùng key Google Gemini gốc">',
+'          </div>',
+'          <div class="row-2">',
+'            <div class="field-group">',
+'              <label>Temperature (Cả 2 nút)</label>',
+'              <input type="number" step="0.05" min="0" max="2" class="form-input" id="setAiTemp" placeholder="0.3">',
+'            </div>',
+'            <div class="field-group">',
+'              <label>Top P (Cả 2 nút)</label>',
+'              <input type="number" step="0.05" min="0" max="1" class="form-input" id="setAiTopP" placeholder="0.85">',
+'            </div>',
+'          </div>',
+'        </div>',
+'',
+'        <div class="settings-box">',
+'          <div class="settings-box-title">🧩 Model Phụ (Nút Khác — OpenAI-Compatible)</div>',
+'          <div class="preset-pills">',
+'            <button type="button" class="preset-pill" data-preset="zai">Z.AI GLM-4.7-Flash</button>',
+'            <button type="button" class="preset-pill" data-preset="openrouter">OpenRouter GLM-5.2</button>',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Base URL</label>',
+'            <input type="url" class="form-input" id="setCustomBaseUrl" placeholder="https://api.z.ai/api/paas/v4">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>API Key</label>',
+'            <input type="password" class="form-input" id="setCustomApiKey" placeholder="API Key nhà cung cấp">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Tên Model</label>',
+'            <input type="text" class="form-input" id="setCustomModel" placeholder="glm-4.7-flash">',
+'          </div>',
+'        </div>',
+'',
+'        <div class="settings-box">',
+'          <div class="settings-box-title">✍️ AI Viết Lại (Bước 2 — viet-lai.md)</div>',
+'          <div class="field-group">',
+'            <label>Nhà cung cấp</label>',
+'            <select class="form-select" id="setRwType">',
+'              <option value="gemini">Google Gemini (Dùng API Gemini)</option>',
+'              <option value="openai_compatible">Model Ngoài (OpenAI-Compatible)</option>',
+'            </select>',
+'          </div>',
+'          <div class="field-group" id="rwBaseUrlGroup" style="display:none;">',
+'            <label>Base URL Viết Lại</label>',
+'            <input type="url" class="form-input" id="setRwBaseUrl" placeholder="https://openrouter.ai/api/v1">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>API Key Viết Lại (Để trống = dùng chung Gemini Key nếu chọn Gemini)</label>',
+'            <input type="password" class="form-input" id="setRwApiKey" placeholder="Để trống nếu dùng chung key trên">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Tên Model Viết Lại</label>',
+'            <input type="text" class="form-input" id="setRwModel" placeholder="gemini-3.5-flash-lite">',
+'          </div>',
+'          <div class="row-2">',
+'            <div class="field-group">',
+'              <label>Temperature</label>',
+'              <input type="number" step="0.05" min="0" max="2" class="form-input" id="setRwTemp" placeholder="0.6">',
+'            </div>',
+'            <div class="field-group">',
+'              <label>Top P</label>',
+'              <input type="number" step="0.05" min="0" max="1" class="form-input" id="setRwTopP" placeholder="0.8">',
+'            </div>',
+'          </div>',
+'        </div>',
+'      </div>',
+'      <div class="modal-foot">',
+'        <button type="button" class="btn-secondary-full" id="btnCancelSettings">Đóng</button>',
+'        <button type="button" class="btn-primary-full" id="btnSaveSettings">💾 Lưu Cài Đặt</button>',
+'      </div>',
+'    </div>',
+'  </div>',
+'',
+'  <script>',
+'  window.__INITIAL_STATE__ = ' + initJson + ';',
+'  (function() {',
+'    "use strict";',
+'    var DAY_MS = 86400000;',
+'    var TIMEZONES = [',
+'      { label: "VN (+7)", value: "+07:00" },',
+'      { label: "Mỹ Tây (-8)", value: "-08:00" },',
+'      { label: "Mỹ Đông (-5)", value: "-05:00" },',
+'      { label: "Mỹ Trung (-6)", value: "-06:00" },',
+'      { label: "Mỹ Núi (-7)", value: "-07:00" },',
+'      { label: "Nhật/Hàn (+9)", value: "+09:00" },',
+'      { label: "Đài/TQ (+8)", value: "+08:00" },',
+'      { label: "Úc (+10)", value: "+10:00" },',
+'      { label: "Châu Âu (+1)", value: "+01:00" },',
+'      { label: "Anh (UTC 0)", value: "+00:00" }',
+'    ];',
+'',
+'    var state = {',
+'      customers: [],',
+'      selectedConvId: localStorage.getItem("sa_mob_selected_conv") || "",',
+'      renderedConvId: "",',
+'      renderedSerialsSig: "",',
+'      renderedMsgsSig: "",',
+'      settings: {},',
+'      webAppUrl: "",',
+'      hasSapoToken: false,',
+'      ctxResetting: {},',
+'      runningMap: {},',
+'      pollTimer: null,',
+'      pendingCopyClear: null,',
+'      toastTimer: null',
+'    };',
+'',
+'    var $ = function(id) { return document.getElementById(id); };',
+'',
+'    function showToast(msg, type, ms) {',
+'      var bar = $("toastBar");',
+'      if (!bar) return;',
+'      bar.textContent = msg;',
+'      bar.className = "toast-bar show " + (type || "");',
+'      clearTimeout(state.toastTimer);',
+'      state.toastTimer = setTimeout(function() {',
+'        bar.className = "toast-bar";',
+'      }, ms || 2800);',
+'    }',
+'',
+'    function getRpcEndpoint() {',
+'      var s = state.settings || {};',
+'      var u = s.selfUrl || state.webAppUrl || "https://script.google.com/macros/s/AKfycbzDk2MwmRuYkdKxWndwRFa0caD7apL6k6gLW71pfQbtGQipFz6yiar3xFXhDuZq_PIAvQ/exec";',
+'      return String(u).trim();',
+'    }',
+'',
+'    function runGas(fnName) {',
+'      var args = Array.prototype.slice.call(arguments, 1);',
+'      if (typeof google !== "undefined" && google && google.script && google.script.run && typeof google.script.run[fnName] === "function") {',
+'        return new Promise(function(resolve, reject) {',
+'          var runner = google.script.run',
+'            .withSuccessHandler(resolve)',
+'            .withFailureHandler(reject);',
+'          runner[fnName].apply(runner, args);',
+'        });',
+'      }',
+'      return fetch(getRpcEndpoint(), {',
+'        method: "POST",',
+'        headers: { "Content-Type": "text/plain;charset=utf-8" },',
+'        body: JSON.stringify({ action: "mobile_rpc", fn: fnName, args: args }),',
+'        redirect: "follow"',
+'      }).then(function(res) {',
+'        if (!res.ok) throw new Error("HTTP " + res.status);',
+'        return res.json();',
+'      });',
+'    }',
+'',
+'    function cleanupLocalStorage24h() {',
+'      var now = Date.now();',
+'      try {',
+'        Object.keys(localStorage).forEach(function(k) {',
+'          if (k.indexOf("sa_mob_res_") === 0 || k.indexOf("sa_mob_draft_") === 0) {',
+'            try {',
+'              var obj = JSON.parse(localStorage.getItem(k) || "{}");',
+'              if (!obj || !obj.savedAt || (now - obj.savedAt > DAY_MS)) {',
+'                localStorage.removeItem(k);',
+'              }',
+'            } catch (e) { localStorage.removeItem(k); }',
+'          } else if (k.indexOf("sa_mob_run_") === 0) {',
+'            try {',
+'              var r = JSON.parse(localStorage.getItem(k) || "{}");',
+'              if (!r || !r.startTime || (now - r.startTime > 240000)) {',
+'                localStorage.removeItem(k);',
+'              }',
+'            } catch (e2) { localStorage.removeItem(k); }',
+'          }',
+'        });',
+'      } catch (eAll) {}',
+'    }',
+'',
+'    function getNowLocalInput() {',
+'      var p = function(n) { return String(n).padStart(2, "0"); };',
+'      var d = new Date();',
+'      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes());',
+'    }',
+'',
+'    function getDraft(convId) {',
+'      if (!convId) return {};',
+'      try {',
+'        var raw = localStorage.getItem("sa_mob_draft_" + convId);',
+'        if (!raw) return {};',
+'        var obj = JSON.parse(raw);',
+'        if (obj && obj.savedAt && (Date.now() - obj.savedAt <= DAY_MS)) return obj;',
+'      } catch (e) {}',
+'      return {};',
+'    }',
+'',
+'    function saveDraft(convId, patch) {',
+'      if (!convId) return;',
+'      var cur = getDraft(convId);',
+'      Object.keys(patch).forEach(function(k) { cur[k] = patch[k]; });',
+'      cur.savedAt = Date.now();',
+'      try { localStorage.setItem("sa_mob_draft_" + convId, JSON.stringify(cur)); } catch (e) {}',
+'    }',
+'',
+'    function getResKey(convId, triggerSource, serial) {',
+'      return "sa_mob_res_" + convId + "_" + triggerSource + "_" + serial;',
+'    }',
+'',
+'    function getSavedResult(convId, triggerSource, serial) {',
+'      if (!convId || !serial) return null;',
+'      try {',
+'        var raw = localStorage.getItem(getResKey(convId, triggerSource, serial));',
+'        if (!raw) return null;',
+'        var obj = JSON.parse(raw);',
+'        if (obj && obj.savedAt && (Date.now() - obj.savedAt > DAY_MS)) {',
+'          localStorage.removeItem(getResKey(convId, triggerSource, serial));',
+'          return null;',
+'        }',
+'        return obj;',
+'      } catch (e) { return null; }',
+'    }',
+'',
+'    function saveResultLocal(convId, triggerSource, serial, resObj) {',
+'      if (!convId || !serial || !resObj) return;',
+'      var obj = Object.assign({}, resObj, { savedAt: resObj.savedAt || Date.now() });',
+'      try { localStorage.setItem(getResKey(convId, triggerSource, serial), JSON.stringify(obj)); } catch (e) {}',
+'    }',
+'',
+'    function removeResultLocal(convId, triggerSource, serial) {',
+'      try { localStorage.removeItem(getResKey(convId, triggerSource, serial)); } catch (e) {}',
+'    }',
+'',
+'    function getRunKey(convId, serial) {',
+'      return convId + "_" + serial;',
+'    }',
+'',
+'    function getActiveRun(convId, serial) {',
+'      if (!convId || !serial) return null;',
+'      var key = getRunKey(convId, serial);',
+'      var mem = state.runningMap[key];',
+'      if (mem && mem.startTime && (Date.now() - mem.startTime < 240000)) return mem;',
+'      try {',
+'        var raw = localStorage.getItem("sa_mob_run_" + key);',
+'        if (raw) {',
+'          var obj = JSON.parse(raw);',
+'          if (obj && obj.startTime && (Date.now() - obj.startTime < 240000)) {',
+'            state.runningMap[key] = obj;',
+'            return obj;',
+'          } else {',
+'            localStorage.removeItem("sa_mob_run_" + key);',
+'          }',
+'        }',
+'      } catch (e) {}',
+'      return null;',
+'    }',
+'',
+'    function setActiveRun(convId, serial, runObj) {',
+'      var key = getRunKey(convId, serial);',
+'      if (runObj) {',
+'        state.runningMap[key] = runObj;',
+'        try { localStorage.setItem("sa_mob_run_" + key, JSON.stringify(runObj)); } catch (e) {}',
+'      } else {',
+'        delete state.runningMap[key];',
+'        try { localStorage.removeItem("sa_mob_run_" + key); } catch (e2) {}',
+'      }',
+'    }',
+'',
+'    function getActiveCustomer() {',
+'      if (!state.customers || state.customers.length === 0) return null;',
+'      var found = state.customers.find(function(c) { return c.convId === state.selectedConvId; });',
+'      if (!found) {',
+'        found = state.customers[0];',
+'        state.selectedConvId = found.convId;',
+'        localStorage.setItem("sa_mob_selected_conv", found.convId);',
+'      }',
+'      return found;',
+'    }',
+'',
+'    function getCustomerSerials(cust) {',
+'      var ser = ($("serialInput").value || "").replace(/\\s+/g, "").trim();',
+'      return ser;',
+'    }',
+'',
+'    function customerHasAnyResult(convId) {',
+'      var prefix = "sa_mob_res_" + convId + "_";',
+'      try {',
+'        return Object.keys(localStorage).some(function(k) { return k.indexOf(prefix) === 0; });',
+'      } catch (e) { return false; }',
+'    }',
+'',
+'    function hydrateFromServerData(data) {',
+'      if (!data) return;',
+'      state.webAppUrl = data.webAppUrl || state.webAppUrl;',
+'      state.hasSapoToken = !!data.hasSapoToken;',
+'      if (data.settings) state.settings = data.settings;',
+'      state.customers = Array.isArray(data.customers) ? data.customers : [];',
+'',
+'      var validIds = {};',
+'      var hasNeedInitialScan = false;',
+'      var hasBusy = false;',
+'',
+'      state.customers.forEach(function(c) {',
+'        validIds[c.convId] = true;',
+'        if (!c.initialScanned) hasNeedInitialScan = true;',
+'        if (c.ctxStatus === "running") hasBusy = true;',
+'        if (c.cachedResults) {',
+'          Object.keys(c.cachedResults).forEach(function(rk) {',
+'            var r = c.cachedResults[rk];',
+'            if (r && r.content) {',
+'              saveResultLocal(c.convId, r.triggerSource, r.serial, r);',
+'              setActiveRun(c.convId, r.serial, null);',
+'            }',
+'          });',
+'        }',
+'        if (c.activeRuns) {',
+'          Object.keys(c.activeRuns).forEach(function(sr) {',
+'            hasBusy = true;',
+'            setActiveRun(c.convId, sr, c.activeRuns[sr]);',
+'          });',
+'        }',
+'      });',
+'',
+'      // Dọn dữ liệu nháp local của khách đã bị gỡ nhãn xóa khỏi Web',
+'      try {',
+'        Object.keys(localStorage).forEach(function(k) {',
+'          if (k.indexOf("sa_mob_draft_") === 0) {',
+'            var cid = k.replace("sa_mob_draft_", "");',
+'            if (!validIds[cid]) localStorage.removeItem(k);',
+'          } else if (k.indexOf("sa_mob_res_") === 0) {',
+'            var matched = false;',
+'            Object.keys(validIds).forEach(function(vcid) { if (k.indexOf("sa_mob_res_" + vcid + "_") === 0) matched = true; });',
+'            if (!matched) localStorage.removeItem(k);',
+'          }',
+'        });',
+'      } catch (eClean) {}',
+'',
+'      renderAll();',
+'      if (hasNeedInitialScan) {',
+'        runGas("mobileProcessPendingQueue").then(function(res) { hydrateFromServerData(res); }).catch(function() {});',
+'      }',
+'      if (hasBusy || Object.keys(state.runningMap).length > 0) {',
+'        ensurePolling();',
+'      }',
+'    }',
+'',
+'    function renderAll() {',
+'      // Header status',
+'      var dot = $("connDot");',
+'      var tokText = $("tokenStatusText");',
+'      if (state.hasSapoToken) {',
+'        dot.className = "brand-dot";',
+'        tokText.textContent = "Đã kết nối Token Sapo";',
+'      } else {',
+'        dot.className = "brand-dot warn";',
+'        tokText.textContent = "Chưa có Token (Mở ⚙️ cài BDSD / F5 PC)";',
+'      }',
+'      $("custCountLabel").textContent = "Khách gắn nhãn Mobile (" + state.customers.length + ")";',
+'',
+'      renderCustomerStrip();',
+'      var cust = getActiveCustomer();',
+'      if (!cust) {',
+'        $("mainWorkspace").style.display = "none";',
+'        $("bottomDock").style.display = "none";',
+'        $("emptyWorkspace").style.display = "flex";',
+'        return;',
+'      }',
+'',
+'      $("emptyWorkspace").style.display = "none";',
+'      $("mainWorkspace").style.display = "flex";',
+'      $("bottomDock").style.display = "block";',
+'',
+'      renderCustomerWorkspace(cust);',
+'    }',
+'',
+'    function renderCustomerStrip() {',
+'      var strip = $("customerStrip");',
+'      strip.innerHTML = "";',
+'      var active = getActiveCustomer();',
+'      state.customers.forEach(function(c) {',
+'        var btn = document.createElement("button");',
+'        btn.type = "button";',
+'        btn.className = "cust-pill" + (active && active.convId === c.convId ? " active" : "");',
+'',
+'        var av = document.createElement("span");',
+'        av.className = "cust-avatar";',
+'        if (c.avatar) {',
+'          var img = document.createElement("img");',
+'          img.src = c.avatar;',
+'          img.onerror = function() { av.textContent = (c.customerName || "K").charAt(0).toUpperCase(); };',
+'          av.appendChild(img);',
+'        } else {',
+'          av.textContent = (c.customerName || "K").charAt(0).toUpperCase();',
+'        }',
+'        btn.appendChild(av);',
+'',
+'        var nameSpan = document.createElement("span");',
+'        nameSpan.className = "cust-name";',
+'        nameSpan.textContent = c.customerName || "Khách Hàng";',
+'        btn.appendChild(nameSpan);',
+'',
+'        var badge = document.createElement("span");',
+'        badge.className = "status-badge";',
+'        var hasRun = Object.keys(state.runningMap).some(function(k) { return k.indexOf(c.convId + "_") === 0; });',
+'        if (c.ctxStatus === "running" || hasRun) badge.textContent = "⏳";',
+'        else if (customerHasAnyResult(c.convId)) badge.textContent = "🔵";',
+'        else if (c.ctxStatus === "done") badge.textContent = "🟣";',
+'        else if (c.ctxStatus === "error") badge.textContent = "🔴";',
+'        btn.appendChild(badge);',
+'',
+'        btn.onclick = function() {',
+'          state.selectedConvId = c.convId;',
+'          localStorage.setItem("sa_mob_selected_conv", c.convId);',
+'          renderAll();',
+'        };',
+'        strip.appendChild(btn);',
+'      });',
+'    }',
+'',
+'    function renderCustomerWorkspace(cust, forceFull) {',
+'      var convId = cust.convId;',
+'      var isNewConv = !!forceFull || (state.renderedConvId !== convId);',
+'      var draft = getDraft(convId);',
+'',
+'      // 1. Seri input & chips (chỉ cập nhật DOM khi đổi khách hoặc vừa lọc xong serial mới)',
+'      var detected = Array.isArray(cust.detectedSerials) ? cust.detectedSerials : [];',
+'      var serialsSig = detected.join(",");',
+'      var curSerial = isNewConv',
+'        ? ((typeof draft.serial === "string") ? draft.serial : (detected[0] || ""))',
+'        : ($("serialInput").value || "");',
+'',
+'      if (isNewConv) {',
+'        $("serialInput").value = curSerial;',
+'      } else if (!curSerial && typeof draft.serial !== "string" && detected[0] && document.activeElement !== $("serialInput")) {',
+'        curSerial = detected[0];',
+'        $("serialInput").value = curSerial;',
+'      }',
+'',
+'      if (isNewConv || state.renderedSerialsSig !== serialsSig) {',
+'        var chipsRow = $("serialChipsRow");',
+'        chipsRow.innerHTML = "";',
+'        if (detected.length > 0) {',
+'          chipsRow.style.display = "flex";',
+'          detected.forEach(function(s) {',
+'            var ch = document.createElement("button");',
+'            ch.type = "button";',
+'            ch.className = "chip-btn" + (s === curSerial ? " selected" : "");',
+'            ch.textContent = "🔢 " + s;',
+'            ch.onclick = function() {',
+'              $("serialInput").value = s;',
+'              saveDraft(convId, { serial: s });',
+'              renderCustomerWorkspace(cust, true);',
+'            };',
+'            chipsRow.appendChild(ch);',
+'          });',
+'        } else {',
+'          chipsRow.style.display = "none";',
+'        }',
+'        state.renderedSerialsSig = serialsSig;',
+'      }',
+'',
+'      // 2. Datetime & Timezone (chỉ khởi tạo khi chuyển sang khách đó để không làm nhảy picker đang mở)',
+'      if (isNewConv) {',
+'        $("dtInput").value = draft.dtVal || getNowLocalInput();',
+'        $("tzSelect").value = draft.tz || "+07:00";',
+'      }',
+'',
+'      // 3. Tin nhắn gần nhất & Ô câu hỏi (không ghi đè textarea khi đang gõ)',
+'      var recents = Array.isArray(cust.recentMessages) ? cust.recentMessages : [];',
+'      var msgsSig = recents.map(function(m) { return m.id || m.time; }).join("|");',
+'      if (isNewConv || state.renderedMsgsSig !== msgsSig) {',
+'        var msgsBox = $("recentMsgsBox");',
+'        msgsBox.innerHTML = "";',
+'        if (recents.length === 0) {',
+'          var emptyMsgNote = cust.initialScanned ? "Chưa có tin nhắn chữ từ khách gần đây. Bạn có thể tự nhập câu hỏi ở ô bên dưới." : "⌛ Đang lọc 5 tin nhắn & Số Seri gần nhất của khách...";',
+'          msgsBox.innerHTML = "<div class=\'hint-sm\' style=\'padding:6px 2px;\'>" + emptyMsgNote + "</div>";',
+'        } else {',
+'          recents.forEach(function(m) {',
+'            var item = document.createElement("button");',
+'            item.type = "button";',
+'            item.className = "msg-bubble-item";',
+'            var txtSpan = document.createElement("span");',
+'            txtSpan.className = "msg-bubble-text";',
+'            txtSpan.textContent = m.text;',
+'            var timeSpan = document.createElement("span");',
+'            timeSpan.className = "msg-bubble-time";',
+'            timeSpan.textContent = m.time || "";',
+'            item.appendChild(txtSpan);',
+'            item.appendChild(timeSpan);',
+'            item.onclick = function() {',
+'              var qEl = $("questionInput");',
+'              var existing = (qEl.value || "").replace(/\\s+$/, "");',
+'              qEl.value = existing ? (existing + "\\n" + m.text) : m.text;',
+'              saveDraft(convId, { question: qEl.value });',
+'              showToast("➕ Đã thêm vào câu hỏi", "success", 1200);',
+'            };',
+'            msgsBox.appendChild(item);',
+'          });',
+'        }',
+'        state.renderedMsgsSig = msgsSig;',
+'      }',
+'      if (isNewConv) {',
+'        $("questionInput").value = draft.question || "";',
+'      }',
+'',
+'      state.renderedConvId = convId;',
+'',
+'      // 4. Hồ sơ ngữ cảnh & khóa nút',
+'      syncContextAndAiButtons(cust);',
+'    }',
+'',
+'    function syncContextAndAiButtons(cust) {',
+'      var convId = cust.convId;',
+'      var ctxBtn = $("btnCtxMain");',
+'      var resetBtn = $("btnCtxReset");',
+'      var subnote = $("ctxSubnote");',
+'      var timeBadge = $("ctxTimeBadge");',
+'      var isResetting = !!state.ctxResetting[convId];',
+'      var isBusyCtx = isResetting || cust.ctxStatus === "running";',
+'',
+'      ctxBtn.className = "btn-ctx-main";',
+'      subnote.className = "ctx-subnote";',
+'      ctxBtn.disabled = false;',
+'      resetBtn.disabled = false;',
+'      resetBtn.textContent = "🔄";',
+'      timeBadge.textContent = cust.ctxTime || "";',
+'',
+'      if (isResetting) {',
+'        ctxBtn.classList.add("running");',
+'        ctxBtn.textContent = "⏳ Đang xóa ngữ cảnh...";',
+'        ctxBtn.disabled = true;',
+'        resetBtn.textContent = "⌛";',
+'        resetBtn.disabled = true;',
+'        subnote.textContent = "Đang xóa dòng hồ sơ cũ trên Google Sheet...";',
+'      } else if (cust.ctxStatus === "running") {',
+'        ctxBtn.classList.add("running");',
+'        ctxBtn.textContent = "⏳ Đang lập Hồ sơ...";',
+'        ctxBtn.disabled = true;',
+'        resetBtn.disabled = true;',
+'        subnote.textContent = "Đang đọc lịch sử tin nhắn Sapo & tổng hợp hồ sơ bằng AI...";',
+'      } else if (cust.ctxStatus === "error") {',
+'        ctxBtn.classList.add("error");',
+'        ctxBtn.textContent = "📋 Lấy lại Hồ sơ";',
+'        subnote.classList.add("err");',
+'        subnote.textContent = "Lỗi: " + (cust.ctxError || "Không rõ nguyên nhân") + " (Bấm Lấy lại hoặc 🔄 để bỏ qua)";',
+'      } else if (cust.ctxType === "cleared") {',
+'        ctxBtn.classList.add("done");',
+'        ctxBtn.textContent = "📋 Đã xóa HS cũ (Sẵn sàng luận)";',
+'        subnote.textContent = "Đã mở khóa Gemini & Khác. Có thể bấm lại nếu muốn quét lại Hồ sơ.";',
+'      } else if (cust.ctxType === "new_customer") {',
+'        ctxBtn.classList.add("done");',
+'        ctxBtn.textContent = "📋 Khách mới (Đã mở khóa)";',
+'        subnote.textContent = "Chưa có tin nhắn lịch sử trước đó. Sẵn sàng luận quẻ.";',
+'      } else if (cust.ctxStatus === "done") {',
+'        ctxBtn.classList.add("done");',
+'        ctxBtn.textContent = "📋 Đã lấy HS (Chạm xem)";',
+'        subnote.textContent = "Hồ sơ đã lưu Google Sheet. Bấm để đọc lại hoặc Copy.";',
+'      } else {',
+'        ctxBtn.textContent = "📋 Hồ sơ";',
+'        subnote.textContent = "Bấm 📋 Hồ sơ để quét lịch sử & tổng hợp AI (hoặc 🔄 để bỏ qua HS).";',
+'      }',
+'',
+'      var serial = getCustomerSerials(cust);',
+'      var unlocked = !!cust.unlocked && !isBusyCtx;',
+'      renderSingleAiButton($("btnGemini"), cust, serial, "luan", "Gemini", unlocked);',
+'      renderSingleAiButton($("btnKhac"), cust, serial, "chu", "Khác", unlocked);',
+'    }',
+'',
+'    function renderSingleAiButton(btn, cust, serial, triggerSource, defaultLabel, unlocked) {',
+'      var convId = cust.convId;',
+'      var otherSource = triggerSource === "luan" ? "chu" : "luan";',
+'      var run = serial ? getActiveRun(convId, serial) : null;',
+'      var saved = serial ? getSavedResult(convId, triggerSource, serial) : null;',
+'',
+'      btn.className = "btn-ai";',
+'      btn.disabled = false;',
+'',
+'      if (!unlocked) {',
+'        btn.textContent = defaultLabel;',
+'        btn.classList.add("locked");',
+'        btn.onclick = function() {',
+'          showToast("🔒 Hãy đợi hoặc bấm 📋 lấy Hồ sơ trước khi luận!", "warning");',
+'          var ctxEl = $("btnCtxMain");',
+'          ctxEl.classList.add("ctx-pulse");',
+'          setTimeout(function() { ctxEl.classList.remove("ctx-pulse"); }, 1500);',
+'        };',
+'        return;',
+'      }',
+'',
+'      if (run) {',
+'        if (run.triggerSource === triggerSource) {',
+'          btn.textContent = "⌛...";',
+'          btn.disabled = true;',
+'          return;',
+'        } else {',
+'          // Khóa tương hỗ nút còn lại kể cả khi đang là nút Copy',
+'          btn.textContent = saved ? "Copy" : defaultLabel;',
+'          if (saved) {',
+'            btn.classList.add(saved.type === "business" ? "copy-business" : (saved.type === "claude" ? "copy-claude" : "copy-gemini"));',
+'          }',
+'          btn.disabled = true;',
+'          return;',
+'        }',
+'      }',
+'',
+'      if (saved && saved.content) {',
+'        btn.textContent = "Copy";',
+'        btn.classList.add(saved.type === "business" ? "copy-business" : (saved.type === "claude" ? "copy-claude" : "copy-gemini"));',
+'        btn.onclick = function() {',
+'          handleCopyResult(convId, triggerSource, serial, saved);',
+'        };',
+'        return;',
+'      }',
+'',
+'      btn.textContent = defaultLabel;',
+'      btn.onclick = function() {',
+'        startDivination(cust, triggerSource);',
+'      };',
+'    }',
+'',
+'    async function copyTextSafe(text) {',
+'      try {',
+'        if (navigator.clipboard && navigator.clipboard.writeText) {',
+'          await navigator.clipboard.writeText(text);',
+'          return true;',
+'        }',
+'      } catch (e1) {}',
+'      try {',
+'        var ta = document.createElement("textarea");',
+'        ta.value = text;',
+'        ta.style.position = "fixed"; ta.style.left = "-9999px"; ta.style.top = "0";',
+'        document.body.appendChild(ta);',
+'        ta.focus(); ta.select();',
+'        var ok = document.execCommand("copy");',
+'        document.body.removeChild(ta);',
+'        if (ok) return true;',
+'      } catch (e2) {}',
+'      return false;',
+'    }',
+'',
+'    async function handleCopyResult(convId, triggerSource, serial, saved) {',
+'      var ok = await copyTextSafe(saved.content);',
+'      if (ok) {',
+'        var msg = saved.type === "business"',
+'          ? "📋 Đã copy bài viết lại (" + (saved.model || "AI") + ")"',
+'          : (saved.type === "claude"',
+'            ? "📋 Đã copy bài luận gốc (" + (saved.model || "AI") + ")"',
+'            : "📋 Đã copy nội dung quẻ thô");',
+'        showToast(msg, "success");',
+'        removeResultLocal(convId, triggerSource, serial);',
+'        runGas("mobileClearResultCache", convId, triggerSource, serial).catch(function() {});',
+'        var cust = getActiveCustomer();',
+'        if (cust) syncContextAndAiButtons(cust);',
+'        renderCustomerStrip();',
+'      } else {',
+'        state.pendingCopyClear = { convId: convId, triggerSource: triggerSource, serial: serial };',
+'        $("manualCopyTextarea").value = saved.content;',
+'        $("manualCopyModal").classList.add("open");',
+'      }',
+'    }',
+'',
+'    function parseDatetimeValue(val) {',
+'      if (!val || val.indexOf("T") === -1) return null;',
+'      var parts = val.split("T");',
+'      var d = parts[0].split("-");',
+'      var t = parts[1].split(":");',
+'      if (d.length !== 3 || t.length < 2) return null;',
+'      return {',
+'        year: parseInt(d[0], 10),',
+'        month: parseInt(d[1], 10),',
+'        day: parseInt(d[2], 10),',
+'        hour: parseInt(t[0], 10),',
+'        min: parseInt(t[1], 10)',
+'      };',
+'    }',
+'',
+'    function startDivination(cust, triggerSource) {',
+'      var convId = cust.convId;',
+'      var serial = ($("serialInput").value || "").replace(/\\s+/g, "").trim();',
+'      if (!serial) {',
+'        showToast("⚠️ Vui lòng nhập hoặc chạm chọn Số Seri trước khi luận!", "warning");',
+'        $("serialInput").focus();',
+'        return;',
+'      }',
+'      var existingRun = getActiveRun(convId, serial);',
+'      if (existingRun) {',
+'        showToast("⏳ Quẻ [" + serial + "] đang được luận, vui lòng đợi!", "warning");',
+'        return;',
+'      }',
+'',
+'      var question = ($("questionInput").value || "").trim();',
+'      var dateObj = parseDatetimeValue($("dtInput").value);',
+'      var tz = $("tzSelect").value || "+07:00";',
+'',
+'      setActiveRun(convId, serial, {',
+'        startTime: Date.now(),',
+'        triggerSource: triggerSource,',
+'        customerName: cust.customerName,',
+'        serial: serial',
+'      });',
+'      syncContextAndAiButtons(cust);',
+'      renderCustomerStrip();',
+'      ensurePolling();',
+'      showToast("⌛ [" + cust.customerName + "] Đang gọi AI luận quẻ...", "info");',
+'',
+'      runGas("mobileRunDivination", {',
+'        convId: convId,',
+'        serial: serial,',
+'        dateObj: dateObj,',
+'        tz: tz,',
+'        question: question,',
+'        customerName: cust.customerName,',
+'        triggerSource: triggerSource',
+'      }).then(function(res) {',
+'        if (res && res.alreadyRunning) {',
+'          showToast("⏳ Server đang luận quẻ này rồi, vui lòng đợi...", "warning");',
+'          return;',
+'        }',
+'        setActiveRun(convId, serial, null);',
+'        if (res && res.success && res.content) {',
+'          saveResultLocal(convId, triggerSource, serial, res);',
+'          var doneMsg = res.type === "business" ? "✅ Đã luận & viết lại xong!" : (res.type === "claude" ? "✅ Đã có bài luận Bước 1 (Fallback)!" : "⚠️ AI lỗi, đã lấy quẻ thô (Màu cam)!");',
+'          showToast(doneMsg, res.type === "gemini" ? "warning" : "success");',
+'        } else {',
+'          showToast("❌ Lỗi: " + (res && res.error ? res.error : "Không lập được quẻ"), "error");',
+'        }',
+'        var cur = getActiveCustomer();',
+'        if (cur) syncContextAndAiButtons(cur);',
+'        renderCustomerStrip();',
+'      }).catch(function(err) {',
+'        setActiveRun(convId, serial, null);',
+'        showToast("❌ Lỗi kết nối: " + (err && err.message ? err.message : err), "error");',
+'        var cur = getActiveCustomer();',
+'        if (cur) syncContextAndAiButtons(cur);',
+'        renderCustomerStrip();',
+'      });',
+'    }',
+'',
+'    function ensurePolling() {',
+'      if (state.pollTimer) return;',
+'      state.pollTimer = setInterval(function() {',
+'        var hasLocalRun = Object.keys(state.runningMap).length > 0;',
+'        var hasBusyCtx = state.customers.some(function(c) { return c.ctxStatus === "running"; });',
+'        if (!hasLocalRun && !hasBusyCtx) {',
+'          clearInterval(state.pollTimer);',
+'          state.pollTimer = null;',
+'          return;',
+'        }',
+'        refreshState(false);',
+'      }, 4000);',
+'    }',
+'',
+'    function refreshState(withBdsdSync) {',
+'      var serialMap = {};',
+'      state.customers.forEach(function(c) {',
+'        var dr = getDraft(c.convId);',
+'        if (dr.serial) serialMap[c.convId] = dr.serial;',
+'      });',
+'      var fn = withBdsdSync ? "mobileSyncWithBdsd" : "mobileGetDashboardState";',
+'      var arg = withBdsdSync ? undefined : serialMap;',
+'      if (withBdsdSync) $("btnRefresh").classList.add("spinning");',
+'      return (withBdsdSync ? runGas("mobileSyncWithBdsd") : runGas("mobileGetDashboardState", serialMap))',
+'        .then(function(res) {',
+'          hydrateFromServerData(res);',
+'          if (withBdsdSync) showToast("✅ Đã đồng bộ danh sách mới nhất", "success", 1500);',
+'        })',
+'        .catch(function(err) {',
+'          if (withBdsdSync) showToast("❌ Lỗi đồng bộ: " + (err && err.message ? err.message : err), "error");',
+'        })',
+'        .finally(function() {',
+'          if (withBdsdSync) $("btnRefresh").classList.remove("spinning");',
+'        });',
+'    }',
+'',
+'    // Context Buttons',
+'    $("btnCtxMain").onclick = function() {',
+'      var cust = getActiveCustomer();',
+'      if (!cust) return;',
+'      if (cust.ctxStatus === "done" && cust.ctxType !== "cleared" && cust.ctxType !== "new_customer") {',
+'        $("profileModalTitle").textContent = "📋 Hồ sơ: " + (cust.customerName || "Khách");',
+'        $("profileModalText").textContent = "⌛ Đang đọc hồ sơ từ Google Sheet...";',
+'        $("profileModal").classList.add("open");',
+'        runGas("mobileReadProfile", cust.convId).then(function(res) {',
+'          $("profileModalText").textContent = (res && res.profileText) ? res.profileText : "(Hồ sơ trống trên Google Sheet)";',
+'        }).catch(function(err) {',
+'          $("profileModalText").textContent = "❌ Lỗi đọc Sheet: " + (err && err.message ? err.message : err);',
+'        });',
+'        return;',
+'      }',
+'      triggerBuildContext(cust.convId);',
+'    };',
+'',
+'    function triggerBuildContext(convId) {',
+'      var cust = state.customers.find(function(c) { return c.convId === convId; });',
+'      if (cust) {',
+'        cust.ctxStatus = "running";',
+'        syncContextAndAiButtons(cust);',
+'        renderCustomerStrip();',
+'      }',
+'      showToast("📋 Đang tải tin nhắn & lập Hồ sơ...", "info");',
+'      ensurePolling();',
+'      runGas("mobileBuildContext", convId).then(function(res) {',
+'        if (res && res.customer) {',
+'          var idx = state.customers.findIndex(function(c) { return c.convId === convId; });',
+'          if (idx >= 0) state.customers[idx] = res.customer;',
+'          renderAll();',
+'          if (res.customer.ctxStatus === "done") showToast("✅ Đã tổng hợp Hồ sơ xong!", "success");',
+'          else if (res.customer.ctxStatus === "error") showToast("❌ " + res.customer.ctxError, "error");',
+'        }',
+'      }).catch(function(err) {',
+'        showToast("❌ Lỗi lập Hồ sơ: " + (err && err.message ? err.message : err), "error");',
+'        refreshState(false);',
+'      });',
+'    }',
+'',
+'    $("btnCtxReset").onclick = function() {',
+'      var cust = getActiveCustomer();',
+'      if (!cust || state.ctxResetting[cust.convId]) return;',
+'      var cid = cust.convId;',
+'      state.ctxResetting[cid] = true;',
+'      syncContextAndAiButtons(cust);',
+'      runGas("mobileClearContext", cid).then(function(res) {',
+'        delete state.ctxResetting[cid];',
+'        if (res && res.customer) {',
+'          var idx = state.customers.findIndex(function(c) { return c.convId === cid; });',
+'          if (idx >= 0) state.customers[idx] = res.customer;',
+'        }',
+'        renderAll();',
+'        showToast("🗑️ Đã xóa ngữ cảnh cũ & mở khóa Luận quẻ!", "success");',
+'      }).catch(function(err) {',
+'        delete state.ctxResetting[cid];',
+'        renderAll();',
+'        showToast("❌ Lỗi xóa ngữ cảnh: " + (err && err.message ? err.message : err), "error");',
+'      });',
+'    };',
+'',
+'    $("btnRebuildProfile").onclick = function() {',
+'      var cust = getActiveCustomer();',
+'      if (!cust) return;',
+'      $("profileModal").classList.remove("open");',
+'      triggerBuildContext(cust.convId);',
+'    };',
+'',
+'    $("btnCopyProfile").onclick = async function() {',
+'      var txt = $("profileModalText").textContent || "";',
+'      if (!txt || txt.indexOf("⌛") === 0) return;',
+'      var ok = await copyTextSafe(txt);',
+'      if (ok) showToast("📋 Đã copy toàn bộ Hồ sơ!", "success");',
+'      else showToast("⚠️ Trình duyệt chặn tự copy, hãy chạm giữ văn bản để chọn!", "warning");',
+'    };',
+'    $("btnCloseProfileModal").onclick = function() { $("profileModal").classList.remove("open"); };',
+'',
+'    // Manual Copy Modal Fallback',
+'    $("btnCloseManualCopy").onclick = function() { $("manualCopyModal").classList.remove("open"); };',
+'    $("btnSelectAndCopyManual").onclick = async function() {',
+'      var ta = $("manualCopyTextarea");',
+'      ta.focus(); ta.select();',
+'      var ok = false;',
+'      try { ok = document.execCommand("copy"); } catch (e) {}',
+'      if (ok && state.pendingCopyClear) {',
+'        var p = state.pendingCopyClear;',
+'        removeResultLocal(p.convId, p.triggerSource, p.serial);',
+'        runGas("mobileClearResultCache", p.convId, p.triggerSource, p.serial).catch(function() {});',
+'        state.pendingCopyClear = null;',
+'        $("manualCopyModal").classList.remove("open");',
+'        var cust = getActiveCustomer();',
+'        if (cust) syncContextAndAiButtons(cust);',
+'        renderCustomerStrip();',
+'        showToast("✅ Đã copy thành công!", "success");',
+'      } else {',
+'        showToast("Hãy bấm chữ Chép / Copy trên bàn phím iPhone/Android!", "info");',
+'      }',
+'    };',
+'',
+'    // Form Draft Listeners',
+'    $("serialInput").oninput = function() {',
+'      var cust = getActiveCustomer();',
+'      if (!cust) return;',
+'      var val = ($("serialInput").value || "").trim();',
+'      saveDraft(cust.convId, { serial: val });',
+'      document.querySelectorAll("#serialChipsRow .chip-btn").forEach(function(btn) {',
+'        var chipSer = (btn.textContent || "").replace(/[^0-9]/g, "");',
+'        btn.classList.toggle("selected", chipSer && chipSer === val);',
+'      });',
+'      syncContextAndAiButtons(cust);',
+'    };',
+'    $("btnClearSerial").onclick = function() {',
+'      var cust = getActiveCustomer();',
+'      $("serialInput").value = "";',
+'      if (cust) {',
+'        saveDraft(cust.convId, { serial: "" });',
+'        renderCustomerWorkspace(cust, true);',
+'      }',
+'      $("serialInput").focus();',
+'    };',
+'    $("dtInput").onchange = function() {',
+'      var cust = getActiveCustomer();',
+'      if (cust) saveDraft(cust.convId, { dtVal: $("dtInput").value });',
+'    };',
+'    $("tzSelect").onchange = function() {',
+'      var cust = getActiveCustomer();',
+'      if (cust) saveDraft(cust.convId, { tz: $("tzSelect").value });',
+'    };',
+'    $("questionInput").oninput = function() {',
+'      var cust = getActiveCustomer();',
+'      if (cust) saveDraft(cust.convId, { question: $("questionInput").value });',
+'    };',
+'    $("btnClearQuestion").onclick = function() {',
+'      var cust = getActiveCustomer();',
+'      $("questionInput").value = "";',
+'      if (cust) saveDraft(cust.convId, { question: "" });',
+'    };',
+'',
+'    // Settings Modal',
+'    function openSettingsModal() {',
+'      var s = state.settings || {};',
+'      $("setBdsdUrl").value = s.bdsdUrl || "https://script.google.com/macros/s/AKfycbz5DPNOoYN3w3X5ppE_DKF4zf3O3Pw7YDg10rfS18qtoQ7wIE7jtJewJ9X3rRfZ5B83/exec";',
+'      $("setSelfUrl").value = s.selfUrl || state.webAppUrl || "https://script.google.com/macros/s/AKfycbzDk2MwmRuYkdKxWndwRFa0caD7apL6k6gLW71pfQbtGQipFz6yiar3xFXhDuZq_PIAvQ/exec";',
+'      $("setLuchaoUrl").value = s.luchaoUrl || "https://dshc-luc-hao.vercel.app/";',
+'      $("setGeminiApiKey").value = s.geminiApiKey || "";',
+'      $("setGeminiBaseUrl").value = s.geminiBaseUrl || "";',
+'      $("setAiTemp").value = s.aiTemperature !== undefined ? s.aiTemperature : "";',
+'      $("setAiTopP").value = s.aiTopP !== undefined ? s.aiTopP : "";',
+'',
+'      var gm = s.geminiModel || "gemini-3.5-flash-lite";',
+'      var sel = $("setGeminiModelSelect");',
+'      var hasOpt = Array.prototype.some.call(sel.options, function(o) { return o.value === gm; });',
+'      if (hasOpt) {',
+'        sel.value = gm;',
+'        $("setGeminiModelCustom").style.display = "none";',
+'      } else {',
+'        sel.value = "__custom__";',
+'        $("setGeminiModelCustom").style.display = "block";',
+'        $("setGeminiModelCustom").value = gm;',
+'      }',
+'',
+'      $("setCustomBaseUrl").value = s.customAiBaseUrl || "https://api.z.ai/api/paas/v4";',
+'      $("setCustomApiKey").value = s.customAiApiKey || "";',
+'      $("setCustomModel").value = s.customAiModel || "glm-4.7-flash";',
+'',
+'      $("setRwType").value = s.rewriteType || "gemini";',
+'      $("rwBaseUrlGroup").style.display = ($("setRwType").value === "openai_compatible") ? "block" : "none";',
+'      $("setRwBaseUrl").value = s.rewriteBaseUrl || "";',
+'      $("setRwApiKey").value = s.rewriteApiKey || "";',
+'      $("setRwModel").value = s.rewriteModel || "gemini-3.5-flash-lite";',
+'      $("setRwTemp").value = s.rewriteTemperature !== undefined ? s.rewriteTemperature : "";',
+'      $("setRwTopP").value = s.rewriteTopP !== undefined ? s.rewriteTopP : "";',
+'',
+'      $("settingsModal").classList.add("open");',
+'    }',
+'',
+'    $("btnOpenSettings").onclick = openSettingsModal;',
+'    $("btnEmptyOpenSettings").onclick = openSettingsModal;',
+'    $("btnCloseSettings").onclick = function() { $("settingsModal").classList.remove("open"); };',
+'    $("btnCancelSettings").onclick = function() { $("settingsModal").classList.remove("open"); };',
+'',
+'    $("setGeminiModelSelect").onchange = function() {',
+'      $("setGeminiModelCustom").style.display = ($("setGeminiModelSelect").value === "__custom__") ? "block" : "none";',
+'    };',
+'    $("setRwType").onchange = function() {',
+'      $("rwBaseUrlGroup").style.display = ($("setRwType").value === "openai_compatible") ? "block" : "none";',
+'    };',
+'    document.querySelectorAll(".preset-pill").forEach(function(pill) {',
+'      pill.onclick = function() {',
+'        if (pill.dataset.preset === "zai") {',
+'          $("setCustomBaseUrl").value = "https://api.z.ai/api/paas/v4";',
+'          $("setCustomModel").value = "glm-4.7-flash";',
+'        } else if (pill.dataset.preset === "openrouter") {',
+'          $("setCustomBaseUrl").value = "https://openrouter.ai/api/v1";',
+'          $("setCustomModel").value = "z-ai/glm-5.2:free";',
+'        }',
+'      };',
+'    });',
+'',
+'    $("btnSaveSettings").onclick = function() {',
+'      var gSel = $("setGeminiModelSelect").value;',
+'      var gModel = (gSel === "__custom__") ? ($("setGeminiModelCustom").value || "").trim() : gSel;',
+'      var payload = {',
+'        bdsdUrl: ($("setBdsdUrl").value || "").trim(),',
+'        selfUrl: ($("setSelfUrl").value || "").trim(),',
+'        luchaoUrl: ($("setLuchaoUrl").value || "https://dshc-luc-hao.vercel.app/").trim(),',
+'        geminiApiKey: ($("setGeminiApiKey").value || "").trim(),',
+'        geminiModel: gModel || "gemini-3.5-flash-lite",',
+'        geminiBaseUrl: ($("setGeminiBaseUrl").value || "").trim(),',
+'        aiTemperature: ($("setAiTemp").value || "").trim(),',
+'        aiTopP: ($("setAiTopP").value || "").trim(),',
+'        customAiBaseUrl: ($("setCustomBaseUrl").value || "").trim(),',
+'        customAiApiKey: ($("setCustomApiKey").value || "").trim(),',
+'        customAiModel: ($("setCustomModel").value || "").trim(),',
+'        rewriteType: $("setRwType").value || "gemini",',
+'        rewriteBaseUrl: ($("setRwBaseUrl").value || "").trim(),',
+'        rewriteApiKey: ($("setRwApiKey").value || "").trim(),',
+'        rewriteModel: ($("setRwModel").value || "gemini-3.5-flash-lite").trim(),',
+'        rewriteTemperature: ($("setRwTemp").value || "").trim(),',
+'        rewriteTopP: ($("setRwTopP").value || "").trim()',
+'      };',
+'      $("btnSaveSettings").textContent = "⏳ Đang lưu...";',
+'      $("btnSaveSettings").disabled = true;',
+'      runGas("mobileSaveSettings", payload).then(function(res) {',
+'        if (res && res.settings) state.settings = res.settings;',
+'        if (res) {',
+'          state.hasSapoToken = !!res.hasSapoToken;',
+'          if (res.webAppUrl) state.webAppUrl = res.webAppUrl;',
+'        }',
+'        $("settingsModal").classList.remove("open");',
+'        showToast("💾 Đã lưu cài đặt & đồng bộ BDSD!", "success");',
+'        refreshState(!!payload.bdsdUrl);',
+'      }).catch(function(err) {',
+'        showToast("❌ Lỗi lưu cài đặt: " + (err && err.message ? err.message : err), "error");',
+'      }).finally(function() {',
+'        $("btnSaveSettings").textContent = "💾 Lưu Cài Đặt";',
+'        $("btnSaveSettings").disabled = false;',
+'      });',
+'    };',
+'',
+'    $("btnRefresh").onclick = function() { refreshState(true); };',
+'    document.addEventListener("visibilitychange", function() {',
+'      if (!document.hidden) refreshState(false);',
+'    });',
+'',
+'    // Init',
+'    cleanupLocalStorage24h();',
+'    var tzSel = $("tzSelect");',
+'    TIMEZONES.forEach(function(tz) {',
+'      var opt = document.createElement("option");',
+'      opt.value = tz.value;',
+'      opt.textContent = tz.label;',
+'      if (tz.value === "+07:00") opt.selected = true;',
+'      tzSel.appendChild(opt);',
+'    });',
+'    setInterval(function() {',
+'      var now = Date.now();',
+'      var changed = false;',
+'      Object.keys(state.runningMap).forEach(function(k) {',
+'        var r = state.runningMap[k];',
+'        if (!r || !r.startTime || (now - r.startTime > 240000)) {',
+'          delete state.runningMap[k];',
+'          try { localStorage.removeItem("sa_mob_run_" + k); } catch (e) {}',
+'          changed = true;',
+'        }',
+'      });',
+'      if (changed) {',
+'        var cust = getActiveCustomer();',
+'        if (cust) syncContextAndAiButtons(cust);',
+'        renderCustomerStrip();',
+'      }',
+'    }, 10000);',
+'',
+'    if (window.__INITIAL_STATE__) {',
+'      hydrateFromServerData(window.__INITIAL_STATE__);',
+'    } else {',
+'      refreshState(false);',
+'    }',
+'  })();',
+'  </script>',
+'</body>',
+'</html>'
+  ].join('\n');
 }
