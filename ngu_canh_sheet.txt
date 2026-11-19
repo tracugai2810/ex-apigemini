@@ -328,6 +328,7 @@ function doPost(e) {
         mobileReadProfile: function(a) { return mobileReadProfile(a[0]); },
         mobileClearContext: function(a) { return mobileClearContext(a[0]); },
         mobileRunDivination: function(a) { return mobileRunDivination(a[0]); },
+        mobilePromoteTimeoutCheckpoint: function(a) { return mobilePromoteTimeoutCheckpoint(a[0], a[1], a[2]); },
         mobileClearResultCache: function(a) { return mobileClearResultCache(a[0], a[1], a[2]); },
         mobileClearProfileCache: function(a) { return mobileClearProfileCache(a[0]); },
         mobileSaveDraft: function(a) { return mobileSaveDraft(a[0], a[1]); }
@@ -1058,6 +1059,32 @@ function parseOptionalNumber_(val) {
   return isNaN(num) ? null : num;
 }
 
+const MOB_RUN_MAX_MS = 365000; // 6 phút 5 giây (khớp trần 6 phút của Google Apps Script)
+
+function getUtf8ByteLength_(str) {
+  try {
+    return Utilities.newBlob(String(str || ''), 'text/plain', 't').getBytes().length;
+  } catch (e) {
+    return String(str || '').length * 2;
+  }
+}
+
+function putCacheJsonSafe_(cache, key, obj, ttlSeconds) {
+  try {
+    const serialized = JSON.stringify(obj);
+    const bytes = getUtf8ByteLength_(serialized);
+    if (bytes < 98000) {
+      cache.put(key, serialized, ttlSeconds || 21600);
+      return true;
+    }
+    Logger.log('⚠️ Bỏ qua lưu Cache [' + key + '] vì vượt 100KB UTF-8 (' + bytes + ' bytes)');
+    return false;
+  } catch (ePut) {
+    Logger.log('⚠️ Lỗi lưu Cache [' + key + ']: ' + (ePut && ePut.message ? ePut.message : ePut));
+    return false;
+  }
+}
+
 function runMobileDivinationServer_(params) {
   const convId = String(params && params.convId || '').trim();
   const serial = String(params && params.serial || '').trim();
@@ -1073,22 +1100,30 @@ function runMobileDivinationServer_(params) {
 
   const cache = CacheService.getScriptCache();
   const runCacheKey = 'run_' + convId + '_' + serial;
+  const resCacheKey = 'res_' + convId + '_' + triggerSource + '_' + serial;
+  const ckptCacheKey = 'ckpt_' + convId + '_' + triggerSource + '_' + serial;
+
   const existingRun = cache.get(runCacheKey);
   if (existingRun) {
     try {
       const parsedRun = JSON.parse(existingRun);
-      if (parsedRun && parsedRun.startTime && (Date.now() - parsedRun.startTime < 240000)) {
+      if (parsedRun && parsedRun.startTime && (Date.now() - parsedRun.startTime < MOB_RUN_MAX_MS)) {
         return { started: false, alreadyRunning: true, runningInfo: parsedRun };
       }
     } catch (e) {}
   }
 
+  const tStart = Date.now();
+  const logTag = '[' + (customerName || convId) + ' | ' + serial + ' | ' + (triggerSource === 'chu' ? 'Khác' : 'Gemini') + '] ';
+  try { cache.remove(ckptCacheKey); } catch (eClrCk) {}
+
   cache.put(runCacheKey, JSON.stringify({
-    startTime: Date.now(),
+    startTime: tStart,
     triggerSource: triggerSource,
     customerName: customerName,
-    serial: serial
-  }), 300);
+    serial: serial,
+    stage: 'lapque'
+  }), 420);
 
   let copyText = '';
   try {
@@ -1097,6 +1132,7 @@ function runMobileDivinationServer_(params) {
     if (!baseUrl.endsWith('/')) baseUrl += '/';
 
     // 1. Gọi API Lập Quẻ
+    const tLq = Date.now();
     let apiUrl = baseUrl + 'api/lap-que?serial=' + encodeURIComponent(serial) + '&tz=' + encodeURIComponent(tz);
     if (dateObj && dateObj.year) {
       const p2 = function(n) { return String(n).padStart(2, '0'); };
@@ -1114,6 +1150,27 @@ function runMobileDivinationServer_(params) {
     }
     copyText = lapQueData.copyText;
 
+    // CHỐT DỌC ĐƯỜNG #1: Cất sẵn quẻ thô (nút cam) ngay sau khi lập quẻ xong, phòng chạm trần 6 phút ở Bước 1
+    putCacheJsonSafe_(cache, ckptCacheKey, {
+      success: true,
+      type: 'gemini',
+      content: copyText,
+      errorReason: 'Quá 6 phút ở Bước 1 — tự chuyển quẻ thô',
+      triggerSource: triggerSource,
+      serial: serial,
+      convId: convId,
+      savedAt: Date.now(),
+      fromCheckpoint: true
+    }, 21600);
+    cache.put(runCacheKey, JSON.stringify({
+      startTime: tStart,
+      triggerSource: triggerSource,
+      customerName: customerName,
+      serial: serial,
+      stage: 'step1'
+    }), 420);
+    Logger.log('🔮 ' + logTag + 'Lập quẻ xong (' + ((Date.now() - tLq) / 1000).toFixed(1) + 's) — Bắt đầu Bước 1');
+
     // 2. Tải kinh-dich.md & đọc Hồ sơ ngữ cảnh trên Sheet
     const mdContent = fetchTextWithCacheServer_(baseUrl + 'kinh-dich.md', 'CACHE_KINH_DICH_MD_V1');
     const historyContext = buildHistoryContextFromSheet_(convId);
@@ -1126,9 +1183,8 @@ function runMobileDivinationServer_(params) {
     const rwTemp = parseOptionalNumber_(settings.rewriteTemperature);
     const rwTopP = parseOptionalNumber_(settings.rewriteTopP);
 
-    const resCacheKey = 'res_' + convId + '_' + triggerSource + '_' + serial;
-
     try {
+      const tStep1 = Date.now();
       let aiResult = '';
       let usedModelName = '';
 
@@ -1176,6 +1232,28 @@ function runMobileDivinationServer_(params) {
 
       // Cắt bỏ [TÓM_TẮT] nếu model lỡ tự viết thêm
       aiResult = aiResult.replace(/(?:\n+[-—~*_]*)*\s*(?:\n+\s*(?:[#*`_~-]*\s*)?\[?\s*TÓM[_ ]TẮT(?:\s+QUẺ)?\s*\]?\s*[*`_~-]*\s*:?[\s\S]*)$/i, '').trim();
+      Logger.log('✅ ' + logTag + 'Bước 1 (' + usedModelName + ') xong trong ' + ((Date.now() - tStep1) / 1000).toFixed(1) + 's (' + aiResult.length + ' ký tự)');
+
+      // CHỐT DỌC ĐƯỜNG #2: Cất sẵn bài gốc Bước 1 (nút xanh lá) trước khi gọi Bước 2, phòng chạm trần 6 phút ở Bước 2
+      putCacheJsonSafe_(cache, ckptCacheKey, {
+        success: true,
+        type: 'claude',
+        content: aiResult,
+        model: usedModelName,
+        errorReason: 'Quá 6 phút ở Bước 2 — giữ bài luận gốc Bước 1',
+        triggerSource: triggerSource,
+        serial: serial,
+        convId: convId,
+        savedAt: Date.now(),
+        fromCheckpoint: true
+      }, 21600);
+      cache.put(runCacheKey, JSON.stringify({
+        startTime: tStart,
+        triggerSource: triggerSource,
+        customerName: customerName,
+        serial: serial,
+        stage: 'step2'
+      }), 420);
 
       // BƯỚC 2: VIẾT LẠI THEO PHONG CÁCH THỰC TẾ (viet-lai.md)
       const vietLaiPrompt = fetchTextWithCacheServer_(baseUrl + 'viet-lai.md', 'CACHE_VIET_LAI_MD_V1');
@@ -1184,6 +1262,7 @@ function runMobileDivinationServer_(params) {
 
       let rewrittenResult = null;
       if (vietLaiPrompt && rwKey) {
+        const tStep2 = Date.now();
         try {
           if (settings.rewriteType === 'openai_compatible' && settings.rewriteBaseUrl) {
             const textRw = callOpenAICompatibleServer_(
@@ -1210,18 +1289,23 @@ function runMobileDivinationServer_(params) {
             const textRw = (rwJson && rwJson.candidates && rwJson.candidates[0] && rwJson.candidates[0].content && rwJson.candidates[0].content.parts && rwJson.candidates[0].content.parts[0] && rwJson.candidates[0].content.parts[0].text || '').trim();
             if (textRw && textRw.length > 20) rewrittenResult = textRw;
           }
+          if (rewrittenResult) {
+            Logger.log('✅ ' + logTag + 'Bước 2 (' + rwModel + ') xong trong ' + ((Date.now() - tStep2) / 1000).toFixed(1) + 's (' + rewrittenResult.length + ' ký tự)');
+          } else {
+            Logger.log('⚠️ ' + logTag + 'Bước 2 trả về ngắn/rỗng sau ' + ((Date.now() - tStep2) / 1000).toFixed(1) + 's -> giữ bài Bước 1');
+          }
         } catch (rwErr) {
-          Logger.log('⚠️ Viết lại gặp sự cố, fallback bài gốc Bước 1: ' + rwErr.message);
+          Logger.log('⚠️ ' + logTag + 'Bước 2 lỗi sau ' + ((Date.now() - tStep2) / 1000).toFixed(1) + 's -> giữ bài Bước 1: ' + (rwErr && rwErr.message ? rwErr.message : rwErr));
         }
       }
 
       let resultObj;
       if (rewrittenResult) {
+        // Đã có bài viết lại Bước 2 -> chỉ lưu bài Bước 2 (bỏ bài gốc Bước 1 cho nhẹ kho 6h)
         resultObj = {
           success: true,
           type: 'business',
           content: rewrittenResult,
-          rawContent: aiResult,
           model: rwModel,
           triggerSource: triggerSource,
           serial: serial,
@@ -1241,14 +1325,13 @@ function runMobileDivinationServer_(params) {
         };
       }
 
-      const serialized = JSON.stringify(resultObj);
-      if (serialized.length < 95000) {
-        try { cache.put(resCacheKey, serialized, 21600); } catch (eC) {}
-      }
+      const savedOk = putCacheJsonSafe_(cache, resCacheKey, resultObj, 21600);
+      try { cache.remove(ckptCacheKey); } catch (eRmCk) {}
+      Logger.log('💾 ' + logTag + 'Hoàn tất (' + resultObj.type + ') | Lưu kho 6h: ' + (savedOk ? 'OK' : 'FAIL') + ' | Tổng: ' + ((Date.now() - tStart) / 1000).toFixed(1) + 's');
       return resultObj;
     } catch (aiErr) {
-      // BƯỚC 1 LỖI -> FALLBACK QUẺ THÔ MÀU CAM (GEMINI)
-      Logger.log('⚠️ Luận Bước 1 lỗi, fallback quẻ thô: ' + aiErr.message);
+      // BƯỚC 1 LỖI SỚM -> FALLBACK QUẺ THÔ MÀU CAM (GEMINI)
+      Logger.log('⚠️ ' + logTag + 'Bước 1 lỗi sau ' + ((Date.now() - tStart) / 1000).toFixed(1) + 's -> fallback quẻ thô: ' + (aiErr && aiErr.message ? aiErr.message : aiErr));
       const fallbackObj = {
         success: true,
         type: 'gemini',
@@ -1259,14 +1342,12 @@ function runMobileDivinationServer_(params) {
         convId: convId,
         savedAt: Date.now()
       };
-      const serializedFb = JSON.stringify(fallbackObj);
-      if (serializedFb.length < 95000) {
-        try { cache.put(resCacheKey, serializedFb, 21600); } catch (eC2) {}
-      }
+      putCacheJsonSafe_(cache, resCacheKey, fallbackObj, 21600);
+      try { cache.remove(ckptCacheKey); } catch (eRmCk2) {}
       return fallbackObj;
     }
   } finally {
-    cache.remove(runCacheKey);
+    try { cache.remove(runCacheKey); } catch (eRmRun) {}
   }
 }
 
@@ -1364,30 +1445,48 @@ function mobileGetDashboardState(serialByConvMap) {
     // Kiểm tra trạng thái chạy AI và kết quả tạm đang nằm trong CacheService (khi thoát/mở lại trình duyệt)
     const activeRuns = {};
     const cachedResults = {};
-    const serialHint = serialByConvMap && serialByConvMap[cust.convId] ? String(serialByConvMap[cust.convId]).trim() : '';
-    const draftSerial = (cust.draft && cust.draft.serial) ? String(cust.draft.serial).trim() : '';
     const checkSerials = [];
-    if (serialHint) checkSerials.push(serialHint);
+    const rawHint = serialByConvMap && serialByConvMap[cust.convId];
+    if (Array.isArray(rawHint)) {
+      rawHint.forEach(function(s) {
+        const cleanS = String(s || '').trim();
+        if (cleanS && checkSerials.indexOf(cleanS) === -1) checkSerials.push(cleanS);
+      });
+    } else if (rawHint) {
+      const cleanOne = String(rawHint).trim();
+      if (cleanOne) checkSerials.push(cleanOne);
+    }
+    const draftSerial = (cust.draft && cust.draft.serial) ? String(cust.draft.serial).trim() : '';
     if (draftSerial && checkSerials.indexOf(draftSerial) === -1) checkSerials.push(draftSerial);
 
     if (checkSerials.length > 0) {
       const runKeys = checkSerials.map(function(s) { return 'run_' + cust.convId + '_' + s; });
       const resKeys = [];
+      const ckptKeys = [];
       checkSerials.forEach(function(s) {
         resKeys.push('res_' + cust.convId + '_luan_' + s);
         resKeys.push('res_' + cust.convId + '_chu_' + s);
+        ckptKeys.push('ckpt_' + cust.convId + '_luan_' + s);
+        ckptKeys.push('ckpt_' + cust.convId + '_chu_' + s);
       });
       try {
         const runHits = cache.getAll(runKeys);
+        const expiredRunKeys = [];
         Object.keys(runHits).forEach(function(k) {
           if (!runHits[k]) return;
           try {
             const parsed = JSON.parse(runHits[k]);
-            if (parsed && parsed.startTime && (Date.now() - parsed.startTime < 240000)) {
+            if (parsed && parsed.startTime && (Date.now() - parsed.startTime < MOB_RUN_MAX_MS)) {
               activeRuns[parsed.serial] = parsed;
+            } else {
+              expiredRunKeys.push(k);
             }
           } catch (eR) {}
         });
+        if (expiredRunKeys.length > 0) {
+          try { cache.removeAll(expiredRunKeys); } catch (eRmExp) {}
+        }
+
         const resHits = cache.getAll(resKeys);
         Object.keys(resHits).forEach(function(k) {
           if (!resHits[k]) return;
@@ -1398,9 +1497,35 @@ function mobileGetDashboardState(serialByConvMap) {
             }
           } catch (eRes) {}
         });
+
+        // Nếu phiên chạy đã hết 6 phút (bị Google ngắt ngang) mà vẫn còn chốt dọc đường -> tự nâng lên thành nút Copy cam/xanh lá
+        const ckptHits = cache.getAll(ckptKeys);
+        const ckptKeysToRemove = [];
+        Object.keys(ckptHits).forEach(function(ck) {
+          if (!ckptHits[ck]) return;
+          try {
+            const parsedCk = JSON.parse(ckptHits[ck]);
+            if (!parsedCk || !parsedCk.content || !parsedCk.triggerSource || !parsedCk.serial) return;
+            const rk = parsedCk.triggerSource + '_' + parsedCk.serial;
+            const runningNow = activeRuns[parsedCk.serial];
+            if (runningNow && runningNow.triggerSource === parsedCk.triggerSource) {
+              return; // Đúng nút này vẫn đang chạy trong vòng 6 phút -> chưa đụng tới chốt tạm
+            }
+            if (!cachedResults[rk]) {
+              const targetResKey = 'res_' + cust.convId + '_' + parsedCk.triggerSource + '_' + parsedCk.serial;
+              putCacheJsonSafe_(cache, targetResKey, parsedCk, 21600);
+              cachedResults[rk] = parsedCk;
+            }
+            ckptKeysToRemove.push(ck);
+          } catch (eCk) {}
+        });
+        if (ckptKeysToRemove.length > 0) {
+          try { cache.removeAll(ckptKeysToRemove); } catch (eRmCkAll) {}
+        }
       } catch (eCache) {}
     }
 
+    cust.checkedSerials = checkSerials;
     cust.activeRuns = activeRuns;
     cust.cachedResults = cachedResults;
     customers.push(cust);
@@ -1492,9 +1617,49 @@ function mobileRunDivination(params) {
   return runMobileDivinationServer_(params);
 }
 
+function mobilePromoteTimeoutCheckpoint(convId, triggerSource, serial) {
+  const cid = String(convId || '').trim();
+  const src = String(triggerSource || 'luan').trim();
+  const ser = String(serial || '').trim();
+  if (!cid || !ser) return { success: false };
+
+  const cache = CacheService.getScriptCache();
+  const runKey = 'run_' + cid + '_' + ser;
+  const resKey = 'res_' + cid + '_' + src + '_' + ser;
+  const ckptKey = 'ckpt_' + cid + '_' + src + '_' + ser;
+
+  try { cache.remove(runKey); } catch (eR) {}
+  try {
+    const existingRes = cache.get(resKey);
+    if (existingRes) {
+      try { cache.remove(ckptKey); } catch (eC) {}
+      return JSON.parse(existingRes);
+    }
+    const rawCk = cache.get(ckptKey);
+    if (rawCk) {
+      const parsedCk = JSON.parse(rawCk);
+      if (parsedCk && parsedCk.content) {
+        putCacheJsonSafe_(cache, resKey, parsedCk, 21600);
+        try { cache.remove(ckptKey); } catch (eC2) {}
+        Logger.log('⏱️ [' + cid + ' | ' + ser + ' | ' + src + '] Chạm trần 6 phút -> tự kích hoạt bản chốt (' + parsedCk.type + ')');
+        return parsedCk;
+      }
+    }
+  } catch (eAll) {}
+  return { success: false, error: 'Quá 6 phút và không tìm thấy dữ liệu chốt tạm.' };
+}
+
 function mobileClearResultCache(convId, triggerSource, serial) {
   const cache = CacheService.getScriptCache();
-  cache.remove('res_' + convId + '_' + triggerSource + '_' + serial);
+  try {
+    cache.removeAll([
+      'res_' + convId + '_' + triggerSource + '_' + serial,
+      'ckpt_' + convId + '_' + triggerSource + '_' + serial
+    ]);
+  } catch (e) {
+    try { cache.remove('res_' + convId + '_' + triggerSource + '_' + serial); } catch (e2) {}
+    try { cache.remove('ckpt_' + convId + '_' + triggerSource + '_' + serial); } catch (e3) {}
+  }
   return { success: true };
 }
 
@@ -1526,12 +1691,7 @@ function mobileSaveDraft(convId, draftPatch) {
     tz: (src.tz !== undefined) ? String(src.tz || '').slice(0, 16) : String(prev.tz || '').slice(0, 16),
     savedAt: Number(src.savedAt || Date.now())
   };
-  try {
-    const serialized = JSON.stringify(draftObj);
-    if (serialized.length < 95000) {
-      cache.put(cacheKey, serialized, 21600);
-    }
-  } catch (ePut) {}
+  putCacheJsonSafe_(cache, cacheKey, draftObj, 21600);
   return { success: true, draft: draftObj };
 }
 
@@ -1721,11 +1881,18 @@ function getMobileWebHtml_(initialStateJson) {
 '      font-size: 11.5px; font-weight: 700; text-transform: none; letter-spacing: 0; cursor: pointer; white-space: nowrap;',
 '    }',
 '    .q-serial-chip.selected { background: #0284c7; color: #fff; border-color: #38bdf8; }',
+'    .q-header-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }',
 '    .q-clear-btn {',
 '      height: 26px; min-width: 26px; padding: 0 7px; border-radius: 7px; flex-shrink: 0;',
 '      border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-secondary);',
 '      font-size: 11.5px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;',
 '    }',
+'    .q-done-btn {',
+'      display: none; height: 32px; padding: 0 12px; border-radius: 8px; flex-shrink: 0;',
+'      border: none; background: #0284c7; color: #fff;',
+'      font-size: 13px; font-weight: 700; cursor: pointer; align-items: center; justify-content: center; gap: 4px;',
+'    }',
+'    .q-done-btn:active { transform: scale(0.96); }',
 '    .dt-grid { display: flex; align-items: stretch; gap: 8px; margin-top: 7px; }',
 '    .dt-grid .form-input {',
 '      flex: 1.55; min-width: 0; width: 0; height: 42px; margin: 0; padding: 0 9px;',
@@ -1739,6 +1906,36 @@ function getMobileWebHtml_(initialStateJson) {
 '      background-repeat: no-repeat; background-position: right 9px center;',
 '    }',
 '    .form-textarea { flex: 1; min-height: 76px; resize: none; line-height: 1.42; }',
+'',
+'    /* Chế độ thu gọn thông minh khi gõ trên điện thoại (tránh bàn phím iPhone đẩy đè lên đồng hồ/pin) */',
+'    @media (max-width: 640px) {',
+'      body.mobile-compose .top-header,',
+'      body.mobile-compose .customer-strip-wrap,',
+'      body.mobile-compose .card-ctx,',
+'      body.mobile-compose .dt-grid,',
+'      body.mobile-compose .form-section-title-top,',
+'      body.mobile-compose .bottom-dock {',
+'        display: none !important;',
+'      }',
+'      body.mobile-compose .main-pad {',
+'        padding: calc(10px + env(safe-area-inset-top)) 12px 12px;',
+'        justify-content: flex-start;',
+'      }',
+'      body.mobile-compose .card-form {',
+'        flex: none;',
+'        min-height: 0;',
+'      }',
+'      body.mobile-compose .form-textarea {',
+'        flex: none;',
+'        height: 165px;',
+'        max-height: 28vh;',
+'        max-height: 28dvh;',
+'      }',
+'      body.mobile-compose .q-header-row { min-height: 34px; margin-top: 8px; margin-bottom: 6px; }',
+'      body.mobile-compose .q-clear-btn { height: 32px; min-width: 32px; font-size: 13px; }',
+'      body.mobile-compose .q-done-btn { display: inline-flex; }',
+'      body.mobile-compose .toast-bar { top: calc(10px + env(safe-area-inset-top)); }',
+'    }',
 '',
 '    /* Tầng 4: Thanh Luận Quẻ Cố Định Dưới Đáy Khung Hình */',
 '    .bottom-dock {',
@@ -1854,7 +2051,7 @@ function getMobileWebHtml_(initialStateJson) {
 '    <!-- NỘI DUNG CHÍNH -->',
 '    <main class="main-pad" id="mainWorkspace" style="display:none;">',
 '      <!-- TẦNG 2: HỒ SƠ NGỮ CẢNH -->',
-'      <section class="card">',
+'      <section class="card card-ctx">',
 '        <div class="section-label">',
 '          <span>📋 Hồ sơ ngữ cảnh</span>',
 '          <span id="ctxTimeBadge"></span>',
@@ -1868,7 +2065,7 @@ function getMobileWebHtml_(initialStateJson) {
 '',
 '      <!-- TẦNG 3: SỐ SERI, NGÀY GIỜ & CÂU HỎI -->',
 '      <section class="card card-form">',
-'        <div class="section-label">',
+'        <div class="section-label form-section-title-top">',
 '          <span>🔢 Seri & Thời gian lập quẻ</span>',
 '        </div>',
 '        <div class="input-wrap">',
@@ -1885,7 +2082,10 @@ function getMobileWebHtml_(initialStateJson) {
 '            <span style="flex-shrink:0;">💬 Câu hỏi</span>',
 '            <div class="q-detected-chips" id="qDetectedChips"></div>',
 '          </div>',
-'          <button type="button" class="q-clear-btn" id="btnQuestionClear" aria-label="Xóa câu hỏi" style="display:none;">✕</button>',
+'          <div class="q-header-actions">',
+'            <button type="button" class="q-clear-btn" id="btnQuestionClear" aria-label="Xóa câu hỏi" style="display:none;">✕</button>',
+'            <button type="button" class="q-done-btn" id="btnQuestionDone" aria-label="Xong">✓ Xong</button>',
+'          </div>',
 '        </div>',
 '        <textarea class="form-textarea" id="questionInput" placeholder="Dán nội dung tin nhắn hoặc tự nhập câu hỏi của khách..." aria-label="Câu hỏi"></textarea>',
 '      </section>',
@@ -2076,6 +2276,7 @@ function getMobileWebHtml_(initialStateJson) {
 '  (function() {',
 '    "use strict";',
 '    var DAY_MS = 86400000;',
+'    var RUN_MAX_MS = 365000;',
 '    var TIMEZONES = [',
 '      { label: "VN (+7)", value: "+07:00" },',
 '      { label: "Mỹ Tây (-8)", value: "-08:00" },',
@@ -2104,7 +2305,9 @@ function getMobileWebHtml_(initialStateJson) {
 '      dirtyDraftConv: {},',
 '      pollTimer: null,',
 '      pendingCopyClear: null,',
-'      toastTimer: null',
+'      toastTimer: null,',
+'      justPastedQuestion: false,',
+'      composeBlurTimer: null',
 '    };',
 '',
 '    var $ = function(id) { return document.getElementById(id); };',
@@ -2161,7 +2364,7 @@ function getMobileWebHtml_(initialStateJson) {
 '          } else if (k.indexOf("sa_mob_run_") === 0) {',
 '            try {',
 '              var r = JSON.parse(localStorage.getItem(k) || "{}");',
-'              if (!r || !r.startTime || (now - r.startTime > 240000)) {',
+'              if (!r || !r.startTime || (now - r.startTime > RUN_MAX_MS)) {',
 '                localStorage.removeItem(k);',
 '              }',
 '            } catch (e2) { localStorage.removeItem(k); }',
@@ -2307,12 +2510,12 @@ function getMobileWebHtml_(initialStateJson) {
 '      if (!convId || !serial) return null;',
 '      var key = getRunKey(convId, serial);',
 '      var mem = state.runningMap[key];',
-'      if (mem && mem.startTime && (Date.now() - mem.startTime < 240000)) return mem;',
+'      if (mem && mem.startTime && (Date.now() - mem.startTime < RUN_MAX_MS)) return mem;',
 '      try {',
 '        var raw = localStorage.getItem("sa_mob_run_" + key);',
 '        if (raw) {',
 '          var obj = JSON.parse(raw);',
-'          if (obj && obj.startTime && (Date.now() - obj.startTime < 240000)) {',
+'          if (obj && obj.startTime && (Date.now() - obj.startTime < RUN_MAX_MS)) {',
 '            state.runningMap[key] = obj;',
 '            return obj;',
 '          } else {',
@@ -2393,7 +2596,11 @@ function getMobileWebHtml_(initialStateJson) {
 '            var r = c.cachedResults[rk];',
 '            if (r && r.content) {',
 '              saveResultLocal(c.convId, r.triggerSource, r.serial, r);',
-'              setActiveRun(c.convId, r.serial, null);',
+'              // Chỉ tắt đồng hồ cát nếu kết quả thuộc ĐÚNG nút đang chạy (Gemini không xóa Khác và ngược lại)',
+'              var curRun = getActiveRun(c.convId, r.serial);',
+'              if (curRun && curRun.triggerSource === r.triggerSource) {',
+'                setActiveRun(c.convId, r.serial, null);',
+'              }',
 '            }',
 '          });',
 '        }',
@@ -2401,6 +2608,19 @@ function getMobileWebHtml_(initialStateJson) {
 '          Object.keys(c.activeRuns).forEach(function(sr) {',
 '            hasBusy = true;',
 '            setActiveRun(c.convId, sr, c.activeRuns[sr]);',
+'          });',
+'        }',
+'        // Nếu một số seri đã được server kiểm tra và chạy quá 15s mà server không còn cờ activeRuns -> tắt đồng hồ cát cũ',
+'        if (Array.isArray(c.checkedSerials) && c.checkedSerials.length > 0) {',
+'          var nowHyd = Date.now();',
+'          c.checkedSerials.forEach(function(chkSer) {',
+'            var hasSrvRun = !!(c.activeRuns && c.activeRuns[chkSer]);',
+'            if (!hasSrvRun) {',
+'              var locRun = getActiveRun(c.convId, chkSer);',
+'              if (locRun && locRun.startTime && (nowHyd - locRun.startTime > 15000)) {',
+'                setActiveRun(c.convId, chkSer, null);',
+'              }',
+'            }',
 '          });',
 '        }',
 '      });',
@@ -2531,6 +2751,19 @@ function getMobileWebHtml_(initialStateJson) {
 '      return list;',
 '    }',
 '',
+'    function removeSerialFromQuestionText(text, targetSerial) {',
+'      var raw = String(text || "");',
+'      var ser = String(targetSerial || "").replace(/[^0-9]/g, "");',
+'      if (!raw || !ser) return raw;',
+'      var re = new RegExp("(^|[^0-9A-Za-z])(?:(?:[Ss](?:ố|Ố|o|O)\\\\s*)?[Ss][eE][rR][iI]\\\\s*[:\\\\-]?\\\\s*|[A-Za-z]{1,3}\\\\-?|[A-Z]{1,2}\\\\s+)?" + ser + "(?![0-9])", "g");',
+'      var out = raw.replace(re, function(match, lead) { return lead || ""; });',
+'      out = out.replace(/[ \\t]{2,}/g, " ");',
+'      out = out.replace(/[ \\t]+([.,!?;:])/g, "$1");',
+'      out = out.replace(/[ \\t]+\\n/g, "\\n").replace(/\\n[ \\t]+/g, "\\n");',
+'      out = out.replace(/\\n{3,}/g, "\\n\\n").trim();',
+'      return out;',
+'    }',
+'',
 '    function updateInputActionButtons() {',
 '      var qVal = ($("questionInput").value || "").trim();',
 '      var qClear = $("btnQuestionClear");',
@@ -2548,44 +2781,105 @@ function getMobileWebHtml_(initialStateJson) {
 '        ch.type = "button";',
 '        ch.className = "q-serial-chip" + (ser === curSerial ? " selected" : "");',
 '        ch.textContent = "✨ " + ser;',
+'        ch.onmousedown = function(ev) { ev.preventDefault(); };',
 '        ch.onclick = function() {',
 '          $("serialInput").value = ser;',
+'          var cleanedQ = removeSerialFromQuestionText($("questionInput").value || "", ser);',
+'          $("questionInput").value = cleanedQ;',
 '          if (cust) {',
-'            saveDraft(cust.convId, { serial: ser }, true);',
+'            saveDraft(cust.convId, { serial: ser, question: cleanedQ }, true);',
 '            syncContextAndAiButtons(cust);',
 '          }',
-'          updateInputActionButtons();',
-'          renderDetectedSerialChips(cust, detectedList);',
+'          processQuestionSerialDetection(cust, false, false);',
 '          showToast("🔢 Đã chọn Seri: " + ser, "success", 1200);',
 '        };',
 '        box.appendChild(ch);',
 '      });',
 '    }',
 '',
-'    function processQuestionSerialDetection(cust, allowAutoFill) {',
+'    function processQuestionSerialDetection(cust, allowAutoFill, removeOnAutoFill) {',
 '      var qText = $("questionInput").value || "";',
 '      var detected = extractSerialsFromQuestion(qText);',
 '      var curSerial = ($("serialInput").value || "").trim();',
 '      if (allowAutoFill && !curSerial && detected.length === 1) {',
-'        $("serialInput").value = detected[0];',
+'        var picked = detected[0];',
+'        $("serialInput").value = picked;',
+'        var nextQ = qText;',
+'        if (removeOnAutoFill) {',
+'          nextQ = removeSerialFromQuestionText(qText, picked);',
+'          $("questionInput").value = nextQ;',
+'          detected = extractSerialsFromQuestion(nextQ);',
+'        }',
 '        if (cust) {',
-'          saveDraft(cust.convId, { serial: detected[0] }, true);',
+'          saveDraft(cust.convId, { serial: picked, question: nextQ }, true);',
 '          syncContextAndAiButtons(cust);',
 '        }',
-'        showToast("🔢 Đã tự nhận Seri: " + detected[0], "success", 1600);',
+'        showToast("🔢 Đã tự nhận Seri: " + picked, "success", 1600);',
 '      }',
 '      updateInputActionButtons();',
 '      renderDetectedSerialChips(cust, detected);',
 '    }',
 '',
+'    function isExecutionTimeoutError(err) {',
+'      var msg = String(err && err.message ? err.message : (err || "")).toLowerCase();',
+'      return msg.indexOf("exceeded maximum execution time") !== -1',
+'        || msg.indexOf("maximum execution time") !== -1;',
+'    }',
+'',
 '    function isTransientDisconnectError(err) {',
 '      var msg = String(err && err.message ? err.message : (err || "")).toLowerCase();',
+'      if (msg.indexOf("lập quẻ") !== -1 || msg.indexOf("thiếu mã") !== -1) return false;',
 '      return msg.indexOf("http 0") !== -1',
+'        || msg.indexOf("status 0") !== -1',
 '        || msg.indexOf("networkerror") !== -1',
 '        || msg.indexOf("connection failure") !== -1',
 '        || msg.indexOf("failed to fetch") !== -1',
 '        || msg.indexOf("load failed") !== -1',
-'        || msg.indexOf("network request failed") !== -1;',
+'        || msg.indexOf("network request failed") !== -1',
+'        || msg.indexOf("a server error occurred") !== -1',
+'        || msg.indexOf("temporary error") !== -1',
+'        || msg.indexOf("service unavailable") !== -1',
+'        || msg.indexOf("bad gateway") !== -1',
+'        || msg.indexOf("gateway timeout") !== -1;',
+'    }',
+'',
+'    function isMobileViewport() {',
+'      return window.innerWidth <= 640;',
+'    }',
+'',
+'    function enterMobileComposeMode() {',
+'      if (!isMobileViewport()) return;',
+'      clearTimeout(state.composeBlurTimer);',
+'      state.composeBlurTimer = null;',
+'      if (!document.body.classList.contains("mobile-compose")) {',
+'        document.body.classList.add("mobile-compose");',
+'      }',
+'      setTimeout(function() {',
+'        try { window.scrollTo(0, 0); } catch (e) {}',
+'      }, 60);',
+'    }',
+'',
+'    function scheduleExitMobileComposeMode() {',
+'      clearTimeout(state.composeBlurTimer);',
+'      state.composeBlurTimer = setTimeout(function() {',
+'        var ae = document.activeElement;',
+'        if (ae && (ae.id === "questionInput" || ae.id === "serialInput")) return;',
+'        document.body.classList.remove("mobile-compose");',
+'        try { window.scrollTo(0, 0); } catch (e) {}',
+'      }, 130);',
+'    }',
+'',
+'    function exitMobileComposeMode(blurActive) {',
+'      clearTimeout(state.composeBlurTimer);',
+'      state.composeBlurTimer = null;',
+'      if (blurActive) {',
+'        var ae = document.activeElement;',
+'        if (ae && typeof ae.blur === "function") ae.blur();',
+'      }',
+'      document.body.classList.remove("mobile-compose");',
+'      setTimeout(function() {',
+'        try { window.scrollTo(0, 0); } catch (e) {}',
+'      }, 40);',
 '    }',
 '',
 '    function renderCustomerWorkspace(cust, forceFull) {',
@@ -2818,29 +3112,57 @@ function getMobileWebHtml_(initialStateJson) {
 '          showToast("⏳ Server đang luận quẻ này rồi, vui lòng đợi...", "warning");',
 '          return;',
 '        }',
-'        setActiveRun(convId, serial, null);',
+'        var curRunOk = getActiveRun(convId, serial);',
+'        if (!curRunOk || curRunOk.triggerSource === triggerSource) {',
+'          setActiveRun(convId, serial, null);',
+'        }',
 '        if (res && res.success && res.content) {',
 '          saveResultLocal(convId, triggerSource, serial, res);',
 '          var doneMsg = res.type === "business" ? "✅ Đã luận & viết lại xong!" : (res.type === "claude" ? "✅ Đã có bài luận Bước 1 (Fallback)!" : "⚠️ AI lỗi, đã lấy quẻ thô (Màu cam)!");',
 '          showToast(doneMsg, res.type === "gemini" ? "warning" : "success");',
 '        } else {',
-'          showToast("❌ Lỗi: " + (res && res.error ? res.error : "Không lập được quẻ"), "error");',
+'          showToast("❌ Lỗi: " + (res && res.error ? res.error : "Không lập được quẻ"), "error", 4800);',
 '        }',
 '        var cur = getActiveCustomer();',
 '        if (cur) syncContextAndAiButtons(cur);',
 '        renderCustomerStrip();',
 '      }).catch(function(err) {',
+'        if (isExecutionTimeoutError(err)) {',
+'          runGas("mobilePromoteTimeoutCheckpoint", convId, triggerSource, serial).then(function(fb) {',
+'            var curRunTo = getActiveRun(convId, serial);',
+'            if (!curRunTo || curRunTo.triggerSource === triggerSource) {',
+'              setActiveRun(convId, serial, null);',
+'            }',
+'            if (fb && fb.success && fb.content) {',
+'              saveResultLocal(convId, triggerSource, serial, fb);',
+'              var fbMsg = fb.type === "business" ? "✅ Đã có bài viết lại!" : (fb.type === "claude" ? "⏱️ Quá 6 phút Bước 2 — đã giữ bài Bước 1 (Xanh lá)!" : "⏱️ Quá 6 phút Bước 1 — đã chuyển quẻ thô (Màu cam)!");',
+'              showToast(fbMsg, "warning", 4500);',
+'            } else {',
+'              showToast("⏱️ Quá 6 phút, vui lòng bấm thử lại!", "error", 4800);',
+'            }',
+'            var curTo = getActiveCustomer();',
+'            if (curTo) syncContextAndAiButtons(curTo);',
+'            renderCustomerStrip();',
+'          }).catch(function() {',
+'            refreshState(false);',
+'          });',
+'          return;',
+'        }',
 '        if (isTransientDisconnectError(err)) {',
 '          ensurePolling();',
-'          showToast("⏳ Mạng tạm gián đoạn, server vẫn đang chạy...", "warning", 2200);',
+'          showToast("⏳ Kết nối tạm gián đoạn, server vẫn đang chạy ngầm...", "warning", 2500);',
 '          setTimeout(function() { refreshState(false); }, 1500);',
 '          return;',
 '        }',
-'        setActiveRun(convId, serial, null);',
-'        showToast("❌ Lỗi kết nối: " + (err && err.message ? err.message : err), "error");',
+'        var curRunErr = getActiveRun(convId, serial);',
+'        if (!curRunErr || curRunErr.triggerSource === triggerSource) {',
+'          setActiveRun(convId, serial, null);',
+'        }',
+'        showToast("❌ Lỗi kết nối: " + (err && err.message ? err.message : err), "error", 4800);',
 '        var cur = getActiveCustomer();',
 '        if (cur) syncContextAndAiButtons(cur);',
 '        renderCustomerStrip();',
+'        refreshState(false);',
 '      });',
 '    }',
 '',
@@ -2858,12 +3180,33 @@ function getMobileWebHtml_(initialStateJson) {
 '      }, 4000);',
 '    }',
 '',
-'    function refreshState(withBdsdSync, isManual) {',
+'    function refreshState(withBdsdSync, isManual, extraSerialMap) {',
 '      var serialMap = {};',
+'      function addSerialToMap(cid, ser) {',
+'        var s = String(ser || "").trim();',
+'        if (!cid || !s) return;',
+'        if (!serialMap[cid]) serialMap[cid] = [];',
+'        if (serialMap[cid].indexOf(s) === -1) serialMap[cid].push(s);',
+'      }',
 '      state.customers.forEach(function(c) {',
 '        var dr = getDraft(c.convId);',
-'        if (dr.serial) serialMap[c.convId] = dr.serial;',
+'        if (dr.serial) addSerialToMap(c.convId, dr.serial);',
 '      });',
+'      Object.keys(state.runningMap).forEach(function(rk) {',
+'        var r = state.runningMap[rk];',
+'        if (!r || !r.serial) return;',
+'        var suffix = "_" + r.serial;',
+'        if (rk.length > suffix.length && rk.slice(-suffix.length) === suffix) {',
+'          addSerialToMap(rk.slice(0, rk.length - suffix.length), r.serial);',
+'        }',
+'      });',
+'      if (extraSerialMap) {',
+'        Object.keys(extraSerialMap).forEach(function(ecid) {',
+'          var arr = extraSerialMap[ecid];',
+'          if (Array.isArray(arr)) arr.forEach(function(s) { addSerialToMap(ecid, s); });',
+'          else addSerialToMap(ecid, arr);',
+'        });',
+'      }',
 '      var showUi = !!withBdsdSync || !!isManual;',
 '      if (showUi) $("btnRefresh").classList.add("spinning");',
 '      return (withBdsdSync ? runGas("mobileSyncWithBdsd") : runGas("mobileGetDashboardState", serialMap))',
@@ -3041,7 +3384,8 @@ function getMobileWebHtml_(initialStateJson) {
 '      }',
 '    };',
 '',
-'    // Form Draft Listeners',
+'    // Form Draft Listeners & Chế độ thu gọn khi gõ trên điện thoại',
+'    $("serialInput").onfocus = function() { enterMobileComposeMode(); };',
 '    $("serialInput").oninput = function() {',
 '      var cust = getActiveCustomer();',
 '      var raw = $("serialInput").value || "";',
@@ -3057,7 +3401,9 @@ function getMobileWebHtml_(initialStateJson) {
 '    $("serialInput").onblur = function() {',
 '      var cust = getActiveCustomer();',
 '      if (cust && state.dirtyDraftConv[cust.convId]) scheduleServerDraftSave(cust.convId, true);',
+'      scheduleExitMobileComposeMode();',
 '    };',
+'    $("btnClearSerial").onmousedown = function(ev) { ev.preventDefault(); };',
 '    $("btnClearSerial").onclick = function() {',
 '      var cust = getActiveCustomer();',
 '      $("serialInput").value = "";',
@@ -3076,23 +3422,43 @@ function getMobileWebHtml_(initialStateJson) {
 '      var cust = getActiveCustomer();',
 '      if (cust) saveDraft(cust.convId, { tz: $("tzSelect").value }, true);',
 '    };',
-'    $("questionInput").oninput = function() {',
+'    $("questionInput").onfocus = function() { enterMobileComposeMode(); };',
+'    $("questionInput").onpaste = function() {',
+'      state.justPastedQuestion = true;',
+'      setTimeout(function() { state.justPastedQuestion = false; }, 120);',
+'    };',
+'    $("questionInput").oninput = function(ev) {',
 '      var cust = getActiveCustomer();',
 '      var qVal = $("questionInput").value || "";',
 '      if (cust) saveDraft(cust.convId, { question: qVal });',
-'      processQuestionSerialDetection(cust, true);',
+'      var isPaste = !!state.justPastedQuestion || (ev && ev.inputType === "insertFromPaste");',
+'      state.justPastedQuestion = false;',
+'      processQuestionSerialDetection(cust, isPaste, isPaste);',
 '    };',
 '    $("questionInput").onblur = function() {',
 '      var cust = getActiveCustomer();',
 '      if (cust && state.dirtyDraftConv[cust.convId]) scheduleServerDraftSave(cust.convId, true);',
+'      scheduleExitMobileComposeMode();',
 '    };',
+'    $("btnQuestionClear").onmousedown = function(ev) { ev.preventDefault(); };',
 '    $("btnQuestionClear").onclick = function() {',
 '      var cust = getActiveCustomer();',
 '      $("questionInput").value = "";',
 '      if (cust) saveDraft(cust.convId, { question: "" }, true);',
-'      processQuestionSerialDetection(cust, false);',
+'      processQuestionSerialDetection(cust, false, false);',
 '      $("questionInput").focus();',
 '    };',
+'    $("btnQuestionDone").onclick = function() {',
+'      var cust = getActiveCustomer();',
+'      if (cust && state.dirtyDraftConv[cust.convId]) scheduleServerDraftSave(cust.convId, true);',
+'      exitMobileComposeMode(true);',
+'    };',
+'    $("mainWorkspace").addEventListener("click", function(ev) {',
+'      if (!document.body.classList.contains("mobile-compose")) return;',
+'      if (ev.target === $("mainWorkspace")) {',
+'        exitMobileComposeMode(true);',
+'      }',
+'    });',
 '',
 '    // Settings Modal',
 '    function openSettingsModal() {',
@@ -3225,9 +3591,18 @@ function getMobileWebHtml_(initialStateJson) {
 '    setInterval(function() {',
 '      var now = Date.now();',
 '      var changed = false;',
+'      var expiredSerialMap = {};',
 '      Object.keys(state.runningMap).forEach(function(k) {',
 '        var r = state.runningMap[k];',
-'        if (!r || !r.startTime || (now - r.startTime > 240000)) {',
+'        if (!r || !r.startTime || (now - r.startTime > RUN_MAX_MS)) {',
+'          if (r && r.serial) {',
+'            var suffix = "_" + r.serial;',
+'            if (k.length > suffix.length && k.slice(-suffix.length) === suffix) {',
+'              var ecid = k.slice(0, k.length - suffix.length);',
+'              if (!expiredSerialMap[ecid]) expiredSerialMap[ecid] = [];',
+'              expiredSerialMap[ecid].push(r.serial);',
+'            }',
+'          }',
 '          delete state.runningMap[k];',
 '          try { localStorage.removeItem("sa_mob_run_" + k); } catch (e) {}',
 '          changed = true;',
@@ -3237,6 +3612,7 @@ function getMobileWebHtml_(initialStateJson) {
 '        var cust = getActiveCustomer();',
 '        if (cust) syncContextAndAiButtons(cust);',
 '        renderCustomerStrip();',
+'        refreshState(false, false, expiredSerialMap);',
 '      }',
 '    }, 10000);',
 '',
