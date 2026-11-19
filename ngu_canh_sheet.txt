@@ -329,6 +329,7 @@ function doPost(e) {
         mobileClearContext: function(a) { return mobileClearContext(a[0]); },
         mobileRunDivination: function(a) { return mobileRunDivination(a[0]); },
         mobileClearResultCache: function(a) { return mobileClearResultCache(a[0], a[1], a[2]); },
+        mobileClearProfileCache: function(a) { return mobileClearProfileCache(a[0]); },
         mobileSaveDraft: function(a) { return mobileSaveDraft(a[0], a[1]); }
       };
       if (!rpcMap[fnName]) {
@@ -379,6 +380,21 @@ function saveMobileSapoAuth_(token, tenant) {
   if (tenant) store.setProperty(MOB_PROP_KEYS.SAPO_TENANT, String(tenant).trim());
 }
 
+function removeMobileCustomerCaches_(convIds) {
+  if (!Array.isArray(convIds) || convIds.length === 0) return;
+  try {
+    const cache = CacheService.getScriptCache();
+    const keys = [];
+    convIds.forEach(function(cid) {
+      const clean = String(cid || '').trim();
+      if (!clean) return;
+      keys.push('draft_' + clean);
+      keys.push('ctx_res_' + clean);
+    });
+    if (keys.length > 0) cache.removeAll(keys);
+  } catch (e) {}
+}
+
 function readMobileCustIndex_() {
   const store = PropertiesService.getScriptProperties();
   let list = [];
@@ -391,11 +407,13 @@ function readMobileCustIndex_() {
   }
   const now = Date.now();
   const valid = [];
+  const expiredIds = [];
   let changed = false;
   list.forEach(function(item) {
     if (!item || !item.convId) return;
     if (item.addedAt && (now - item.addedAt > MOB_TTL_MS)) {
       store.deleteProperty(MOB_PROP_KEYS.CUST_PREFIX + item.convId);
+      expiredIds.push(item.convId);
       changed = true;
     } else {
       valid.push(item);
@@ -403,6 +421,7 @@ function readMobileCustIndex_() {
   });
   if (changed) {
     store.setProperty(MOB_PROP_KEYS.CUST_INDEX, JSON.stringify(valid));
+    removeMobileCustomerCaches_(expiredIds);
   }
   return valid;
 }
@@ -420,31 +439,15 @@ function getMobileCustomer_(convId) {
 function saveMobileCustomer_(custObj) {
   if (!custObj || !custObj.convId) return;
   const store = PropertiesService.getScriptProperties();
-  // Giới hạn recentMessages nhỏ gọn (tối đa 5 tin cuối) để luôn dưới trần 9KB của mỗi key PropertiesService
+  // Chỉ giữ metadata nhẹ trong PropertiesService (nháp dài & kết quả copy nằm ở CacheService 6h)
   const copy = Object.assign({}, custObj);
-  if (Array.isArray(copy.recentMessages)) {
-    copy.recentMessages = copy.recentMessages.slice(-5).map(function(m) {
-      return {
-        id: String(m.id || ''),
-        text: String(m.text || '').slice(0, 350),
-        time: String(m.time || '')
-      };
-    });
-  }
-  if (Array.isArray(copy.detectedSerials)) {
-    copy.detectedSerials = copy.detectedSerials.slice(0, 6);
-  }
+  delete copy.draft;
+  delete copy.recentMessages;
+  delete copy.detectedSerials;
+  delete copy.initialScanned;
+  delete copy.initialScanError;
   if (copy.ctxError && String(copy.ctxError).length > 300) {
     copy.ctxError = String(copy.ctxError).slice(0, 300);
-  }
-  if (copy.draft && typeof copy.draft === 'object') {
-    copy.draft = {
-      serial: String(copy.draft.serial || '').slice(0, 50),
-      question: String(copy.draft.question || '').slice(0, 4000),
-      dtVal: String(copy.draft.dtVal || '').slice(0, 30),
-      tz: String(copy.draft.tz || '').slice(0, 16),
-      savedAt: Number(copy.draft.savedAt || Date.now())
-    };
   }
   store.setProperty(MOB_PROP_KEYS.CUST_PREFIX + copy.convId, JSON.stringify(copy));
 }
@@ -452,6 +455,7 @@ function saveMobileCustomer_(custObj) {
 function removeMobileCustomer_(convId) {
   const store = PropertiesService.getScriptProperties();
   store.deleteProperty(MOB_PROP_KEYS.CUST_PREFIX + convId);
+  removeMobileCustomerCaches_([convId]);
   const indexList = readMobileCustIndex_().filter(function(it) { return it.convId !== convId; });
   store.setProperty(MOB_PROP_KEYS.CUST_INDEX, JSON.stringify(indexList));
 }
@@ -467,12 +471,15 @@ function applyTaggedCustomerSyncList_(taggedCustomers, untaggedConvIds) {
 
     // 1. Xóa ngay khách vừa bị gỡ nhãn Mobile
     if (Array.isArray(untaggedConvIds)) {
+      const removedIds = [];
       untaggedConvIds.forEach(function(cid) {
         const cleanId = String(cid || '').trim();
         if (!cleanId) return;
         store.deleteProperty(MOB_PROP_KEYS.CUST_PREFIX + cleanId);
         delete indexMap[cleanId];
+        removedIds.push(cleanId);
       });
+      removeMobileCustomerCaches_(removedIds);
     }
 
     // 2. Đồng bộ danh sách khách đang gắn nhãn Mobile (KHÔNG quét lại nếu khách đang treo chưa gỡ nhãn)
@@ -967,6 +974,12 @@ function buildCustomerContextOnServer_(convId) {
     });
 
     const nowTime = saveConvProfileToSheet_(cid, finalName, profileText);
+    try {
+      const ctxCachePayload = JSON.stringify({ content: profileText, time: nowTime, savedAt: Date.now() });
+      if (ctxCachePayload.length < 95000) {
+        cache.put('ctx_res_' + cid, ctxCachePayload, 21600);
+      }
+    } catch (eCtxCache) {}
     cust.ctxStatus = 'done';
     cust.ctxType = 'ok';
     cust.ctxTime = nowTime;
@@ -1310,21 +1323,52 @@ function mobileGetDashboardState(serialByConvMap) {
   const cache = CacheService.getScriptCache();
   const customers = [];
 
+  // Đọc hàng loạt nháp (draft_*) và bản copy nhanh Hồ sơ (ctx_res_*) từ CacheService (6h)
+  const draftHits = {};
+  const ctxResHits = {};
+  if (indexList.length > 0) {
+    const batchKeys = [];
+    indexList.forEach(function(idxItem) {
+      batchKeys.push('draft_' + idxItem.convId);
+      batchKeys.push('ctx_res_' + idxItem.convId);
+    });
+    try {
+      const allBatch = cache.getAll(batchKeys);
+      indexList.forEach(function(idxItem) {
+        const cid = idxItem.convId;
+        if (allBatch['draft_' + cid]) {
+          try { draftHits[cid] = JSON.parse(allBatch['draft_' + cid]); } catch (eD) {}
+        }
+        if (allBatch['ctx_res_' + cid]) {
+          try { ctxResHits[cid] = JSON.parse(allBatch['ctx_res_' + cid]); } catch (eC) {}
+        }
+      });
+    } catch (eBatch) {}
+  }
+
   indexList.forEach(function(idxItem) {
     const cust = getMobileCustomer_(idxItem.convId);
     if (!cust) return;
+
+    if (draftHits[cust.convId]) {
+      cust.draft = draftHits[cust.convId];
+    }
+    const ctxCache = ctxResHits[cust.convId];
+    if (cust.ctxStatus === 'done' && cust.ctxType === 'ok' && ctxCache && ctxCache.content) {
+      cust.hasCtxCache = true;
+      cust.cachedProfileText = ctxCache.content;
+    } else {
+      cust.hasCtxCache = false;
+    }
 
     // Kiểm tra trạng thái chạy AI và kết quả tạm đang nằm trong CacheService (khi thoát/mở lại trình duyệt)
     const activeRuns = {};
     const cachedResults = {};
     const serialHint = serialByConvMap && serialByConvMap[cust.convId] ? String(serialByConvMap[cust.convId]).trim() : '';
+    const draftSerial = (cust.draft && cust.draft.serial) ? String(cust.draft.serial).trim() : '';
     const checkSerials = [];
     if (serialHint) checkSerials.push(serialHint);
-    if (Array.isArray(cust.detectedSerials)) {
-      cust.detectedSerials.forEach(function(s) {
-        if (s && checkSerials.indexOf(s) === -1) checkSerials.push(s);
-      });
-    }
+    if (draftSerial && checkSerials.indexOf(draftSerial) === -1) checkSerials.push(draftSerial);
 
     if (checkSerials.length > 0) {
       const runKeys = checkSerials.map(function(s) { return 'run_' + cust.convId + '_' + s; });
@@ -1431,6 +1475,7 @@ function mobileClearContext(convId) {
   const cid = String(convId || '').trim();
   if (!cid) throw new Error('Thiếu convId');
   deleteConvProfileFromSheet_(cid);
+  try { CacheService.getScriptCache().remove('ctx_res_' + cid); } catch (eC) {}
   const cust = getMobileCustomer_(cid);
   if (cust) {
     cust.ctxStatus = 'done';
@@ -1453,23 +1498,41 @@ function mobileClearResultCache(convId, triggerSource, serial) {
   return { success: true };
 }
 
+function mobileClearProfileCache(convId) {
+  const cid = String(convId || '').trim();
+  if (!cid) return { success: false };
+  try { CacheService.getScriptCache().remove('ctx_res_' + cid); } catch (e) {}
+  return { success: true };
+}
+
 function mobileSaveDraft(convId, draftPatch) {
   const cid = String(convId || '').trim();
   if (!cid || cid === 'default') return { success: false };
-  const cust = getMobileCustomer_(cid);
-  if (!cust) return { success: false };
+  if (!getMobileCustomer_(cid)) return { success: false };
 
-  const prev = (cust.draft && typeof cust.draft === 'object') ? cust.draft : {};
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'draft_' + cid;
+  let prev = {};
+  try {
+    const rawPrev = cache.get(cacheKey);
+    if (rawPrev) prev = JSON.parse(rawPrev) || {};
+  } catch (ePrev) {}
+
   const src = (draftPatch && typeof draftPatch === 'object') ? draftPatch : {};
-  cust.draft = {
+  const draftObj = {
     serial: (src.serial !== undefined) ? String(src.serial || '').slice(0, 50) : String(prev.serial || '').slice(0, 50),
-    question: (src.question !== undefined) ? String(src.question || '').slice(0, 4000) : String(prev.question || '').slice(0, 4000),
+    question: (src.question !== undefined) ? String(src.question || '').slice(0, 45000) : String(prev.question || '').slice(0, 45000),
     dtVal: (src.dtVal !== undefined) ? String(src.dtVal || '').slice(0, 30) : String(prev.dtVal || '').slice(0, 30),
     tz: (src.tz !== undefined) ? String(src.tz || '').slice(0, 16) : String(prev.tz || '').slice(0, 16),
     savedAt: Number(src.savedAt || Date.now())
   };
-  saveMobileCustomer_(cust);
-  return { success: true, draft: cust.draft };
+  try {
+    const serialized = JSON.stringify(draftObj);
+    if (serialized.length < 95000) {
+      cache.put(cacheKey, serialized, 21600);
+    }
+  } catch (ePut) {}
+  return { success: true, draft: draftObj };
 }
 
 // ===================================================================
@@ -2034,6 +2097,8 @@ function getMobileWebHtml_(initialStateJson) {
 '      webAppUrl: "",',
 '      hasSapoToken: false,',
 '      ctxResetting: {},',
+'      ctxCopyClearing: {},',
+'      ctxLocalOnly: {},',
 '      runningMap: {},',
 '      draftTimers: {},',
 '      dirtyDraftConv: {},',
@@ -2210,38 +2275,28 @@ function getMobileWebHtml_(initialStateJson) {
 '      if (!convId || !content) return;',
 '      try {',
 '        localStorage.setItem("sa_mob_ctx_" + convId, JSON.stringify({ content: content, time: time || "", savedAt: Date.now() }));',
-'        localStorage.removeItem("sa_mob_ctx_copied_" + convId);',
 '      } catch (e) {}',
 '    }',
 '',
-'    function markProfileCopiedLocal(convId, time) {',
-'      if (!convId) return;',
-'      try {',
-'        localStorage.removeItem("sa_mob_ctx_" + convId);',
-'        localStorage.setItem("sa_mob_ctx_copied_" + convId, JSON.stringify({ time: time || "", savedAt: Date.now() }));',
-'      } catch (e) {}',
-'    }',
-'',
-'    function isProfileCopiedLocal(convId, time) {',
-'      if (!convId) return false;',
-'      try {',
-'        var raw = localStorage.getItem("sa_mob_ctx_copied_" + convId);',
-'        if (!raw) return false;',
-'        var obj = JSON.parse(raw);',
-'        if (!obj || !obj.savedAt || (Date.now() - obj.savedAt > DAY_MS)) {',
-'          localStorage.removeItem("sa_mob_ctx_copied_" + convId);',
-'          return false;',
-'        }',
-'        return String(obj.time || "") === String(time || "");',
-'      } catch (e) { return false; }',
-'    }',
-'',
-'    function clearProfileLocalAll(convId) {',
+'    function removeProfileLocal(convId) {',
 '      if (!convId) return;',
 '      try {',
 '        localStorage.removeItem("sa_mob_ctx_" + convId);',
 '        localStorage.removeItem("sa_mob_ctx_copied_" + convId);',
 '      } catch (e) {}',
+'    }',
+'',
+'    function finishProfileCopied(convId, cust) {',
+'      removeProfileLocal(convId);',
+'      delete state.ctxLocalOnly[convId];',
+'      state.ctxCopyClearing[convId] = (cust && cust.ctxTime) ? cust.ctxTime : "1";',
+'      if (cust) {',
+'        cust.hasCtxCache = false;',
+'        delete cust.cachedProfileText;',
+'        syncContextAndAiButtons(cust);',
+'      }',
+'      renderCustomerStrip();',
+'      runGas("mobileClearProfileCache", convId).catch(function() {});',
 '    }',
 '',
 '    function getRunKey(convId, serial) {',
@@ -2323,6 +2378,16 @@ function getMobileWebHtml_(initialStateJson) {
 '            try { localStorage.setItem("sa_mob_draft_" + c.convId, JSON.stringify(c.draft)); } catch (eDr) {}',
 '          }',
 '        }',
+'        if (c.hasCtxCache && c.cachedProfileText) {',
+'          if (!(state.ctxCopyClearing[c.convId] && state.ctxCopyClearing[c.convId] === c.ctxTime)) {',
+'            saveProfileLocal(c.convId, c.cachedProfileText, c.ctxTime);',
+'          }',
+'        } else {',
+'          delete state.ctxCopyClearing[c.convId];',
+'          if (state.ctxLocalOnly[c.convId] !== c.ctxTime) {',
+'            removeProfileLocal(c.convId);',
+'          }',
+'        }',
 '        if (c.cachedResults) {',
 '          Object.keys(c.cachedResults).forEach(function(rk) {',
 '            var r = c.cachedResults[rk];',
@@ -2347,8 +2412,7 @@ function getMobileWebHtml_(initialStateJson) {
 '            var cid = k.replace("sa_mob_draft_", "");',
 '            if (!validIds[cid]) localStorage.removeItem(k);',
 '          } else if (k.indexOf("sa_mob_ctx_copied_") === 0) {',
-'            var cidCopied = k.replace("sa_mob_ctx_copied_", "");',
-'            if (!validIds[cidCopied]) localStorage.removeItem(k);',
+'            localStorage.removeItem(k);',
 '          } else if (k.indexOf("sa_mob_ctx_") === 0) {',
 '            var cidCtx = k.replace("sa_mob_ctx_", "");',
 '            if (!validIds[cidCtx]) localStorage.removeItem(k);',
@@ -2582,7 +2646,7 @@ function getMobileWebHtml_(initialStateJson) {
 '        ctxBtn.classList.add("new");',
 '        ctxBtn.textContent = "✅ Khách mới";',
 '        subnote.textContent = "Đoạn chat chưa có tin nhắn chữ. Bấm lại để quét lại nếu cần.";',
-'      } else if (cust.ctxStatus === "done" && cust.ctxType === "ok" && !isProfileCopiedLocal(convId, cust.ctxTime)) {',
+'      } else if (cust.ctxStatus === "done" && cust.ctxType === "ok" && !state.ctxCopyClearing[convId] && ((getSavedProfile(convId) && getSavedProfile(convId).content) || cust.hasCtxCache)) {',
 '        var shortT = formatShortTime(cust.ctxTime);',
 '        ctxBtn.classList.add("ready");',
 '        ctxBtn.textContent = "📋 Copy HS" + (shortT ? (" (" + shortT + ")") : "");',
@@ -2820,15 +2884,13 @@ function getMobileWebHtml_(initialStateJson) {
 '      var cust = getActiveCustomer();',
 '      if (!cust) return;',
 '      var cid = cust.convId;',
-'      var isReadyCopy = (cust.ctxStatus === "done" && cust.ctxType === "ok" && !isProfileCopiedLocal(cid, cust.ctxTime));',
+'      var localProf = getSavedProfile(cid);',
+'      var isReadyCopy = (cust.ctxStatus === "done" && cust.ctxType === "ok" && !state.ctxCopyClearing[cid] && ((localProf && localProf.content) || cust.hasCtxCache));',
 '      if (isReadyCopy) {',
-'        var localProf = getSavedProfile(cid);',
 '        if (localProf && localProf.content) {',
 '          var okCopy = await copyTextSafe(localProf.content);',
 '          if (okCopy) {',
-'            markProfileCopiedLocal(cid, cust.ctxTime);',
-'            syncContextAndAiButtons(cust);',
-'            renderCustomerStrip();',
+'            finishProfileCopied(cid, cust);',
 '            showToast("📋 Đã copy Hồ sơ ngữ cảnh!", "success");',
 '          } else {',
 '            state.pendingCopyClear = { isProfile: true, convId: cid, time: cust.ctxTime };',
@@ -2849,9 +2911,7 @@ function getMobileWebHtml_(initialStateJson) {
 '          saveProfileLocal(cid, txt, cust.ctxTime);',
 '          var ok2 = await copyTextSafe(txt);',
 '          if (ok2) {',
-'            markProfileCopiedLocal(cid, cust.ctxTime);',
-'            syncContextAndAiButtons(cust);',
-'            renderCustomerStrip();',
+'            finishProfileCopied(cid, cust);',
 '            showToast("📋 Đã copy Hồ sơ ngữ cảnh!", "success");',
 '          } else {',
 '            $("profileModalTitle").textContent = "📋 Hồ sơ: " + (cust.customerName || "Khách");',
@@ -2869,7 +2929,9 @@ function getMobileWebHtml_(initialStateJson) {
 '    };',
 '',
 '    function triggerBuildContext(convId) {',
-'      clearProfileLocalAll(convId);',
+'      removeProfileLocal(convId);',
+'      delete state.ctxCopyClearing[convId];',
+'      delete state.ctxLocalOnly[convId];',
 '      var cust = state.customers.find(function(c) { return c.convId === convId; });',
 '      if (cust) {',
 '        cust.ctxStatus = "running";',
@@ -2882,6 +2944,7 @@ function getMobileWebHtml_(initialStateJson) {
 '        if (res && res.customer) {',
 '          if (res.profileText && res.customer.ctxStatus === "done" && res.customer.ctxType === "ok") {',
 '            saveProfileLocal(convId, res.profileText, res.customer.ctxTime);',
+'            state.ctxLocalOnly[convId] = res.customer.ctxTime;',
 '          }',
 '          var idx = state.customers.findIndex(function(c) { return c.convId === convId; });',
 '          if (idx >= 0) state.customers[idx] = res.customer;',
@@ -2910,7 +2973,9 @@ function getMobileWebHtml_(initialStateJson) {
 '      if (!cust || state.ctxResetting[cust.convId]) return;',
 '      var cid = cust.convId;',
 '      state.ctxResetting[cid] = true;',
-'      clearProfileLocalAll(cid);',
+'      removeProfileLocal(cid);',
+'      delete state.ctxCopyClearing[cid];',
+'      delete state.ctxLocalOnly[cid];',
 '      syncContextAndAiButtons(cust);',
 '      runGas("mobileClearContext", cid).then(function(res) {',
 '        delete state.ctxResetting[cid];',
@@ -2940,11 +3005,7 @@ function getMobileWebHtml_(initialStateJson) {
 '      var ok = await copyTextSafe(txt);',
 '      if (ok) {',
 '        var cust = getActiveCustomer();',
-'        if (cust) {',
-'          markProfileCopiedLocal(cust.convId, cust.ctxTime);',
-'          syncContextAndAiButtons(cust);',
-'          renderCustomerStrip();',
-'        }',
+'        if (cust) finishProfileCopied(cust.convId, cust);',
 '        $("profileModal").classList.remove("open");',
 '        showToast("📋 Đã copy Hồ sơ ngữ cảnh!", "success");',
 '      } else {',
@@ -2963,7 +3024,8 @@ function getMobileWebHtml_(initialStateJson) {
 '      if (ok && state.pendingCopyClear) {',
 '        var p = state.pendingCopyClear;',
 '        if (p.isProfile) {',
-'          markProfileCopiedLocal(p.convId, p.time);',
+'          var curCust = state.customers.find(function(c) { return c.convId === p.convId; });',
+'          finishProfileCopied(p.convId, curCust);',
 '        } else {',
 '          removeResultLocal(p.convId, p.triggerSource, p.serial);',
 '          runGas("mobileClearResultCache", p.convId, p.triggerSource, p.serial).catch(function() {});',
