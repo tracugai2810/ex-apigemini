@@ -1053,6 +1053,33 @@ const bgContextService = {
     return true;
   },
 
+  countWords(text) {
+    const clean = String(text || '').trim();
+    if (!clean) return 0;
+    const tokens = clean.split(/\s+/);
+    let count = 0;
+    for (const tk of tokens) {
+      if (/[0-9A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/.test(tk)) count++;
+    }
+    return count;
+  },
+
+  detectProfileTruncation(text, finishReason = '') {
+    const reason = String(finishReason || '').trim().toUpperCase();
+    if (reason && reason !== 'STOP' && reason !== 'END_TURN') {
+      return { truncated: true, reason: `API dừng bất thường (${reason})` };
+    }
+    const str = String(text || '').trim();
+    if (!str) {
+      return { truncated: true, reason: 'Hồ sơ rỗng' };
+    }
+    const hasSection3 = /(?:^|\n)\s*(?:[#*_>\-\s]*)(?:(?:3|III)\s*[\.\):]\s*(?:[#*_]*\s*)?(?:GHI\s*CHÚ|LƯU\s*Ý|TRẠNG\s*THÁI|TỔNG\s*KẾT|CHỐT|MÂU\s*THUẪN)|GHI\s*CHÚ\s*QUAN\s*TRỌNG|KHÔNG\s*MÂU\s*THUẪN)/i.test(str);
+    if (!hasSection3) {
+      return { truncated: true, reason: 'Thiếu Mục 3 (có thể bị cắt đoạn)' };
+    }
+    return { truncated: false, reason: '' };
+  },
+
   async summarizeContext({ apiKey, model, customerName, gender, filteredLines }) {
     if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key');
     const useModel = model || 'gemini-3.5-flash-lite';
@@ -1092,7 +1119,16 @@ const bgContextService = {
         const json = await bgAiService.callModel(useModel, apiKey, payload, 120000);
         const text = (json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
         if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
-        return text;
+        const finishReason = json?.candidates?.[0]?.finishReason || '';
+        const wordCount = this.countWords(text);
+        const truncInfo = this.detectProfileTruncation(text, finishReason);
+        return {
+          text,
+          wordCount,
+          truncated: truncInfo.truncated,
+          truncReason: truncInfo.reason,
+          finishReason
+        };
       } catch (e) {
         lastErr = e;
         const msg = String(e?.message || '').toLowerCase();
@@ -1179,13 +1215,17 @@ const bgContextService = {
       sendStatus(`Đã đọc ${messages.length} tin (lọc ${filteredLines.length} tin). Đang tổng hợp (${useModel})...`);
 
       try {
-        const profileText = await this.summarizeContext({
+        const summaryRes = await this.summarizeContext({
           apiKey: settings.apiKey,
           model: useModel,
           customerName: finalName,
           gender: userMeta.gender,
           filteredLines
         });
+        const profileText = summaryRes.text;
+        const wordCount = summaryRes.wordCount;
+        const truncated = !!summaryRes.truncated;
+        const truncReason = summaryRes.truncReason || '';
 
         sendStatus('Đang lưu hồ sơ lên Google Sheet...');
         const postRes = await bgAiService.saveSheetPost(settings.syncSheetUrl, {
@@ -1200,6 +1240,9 @@ const bgContextService = {
           [ctxKey]: {
             type: 'ok',
             content: profileText,
+            wordCount,
+            truncated,
+            truncReason,
             time: nowTime,
             sheetSaved,
             convId,
@@ -1215,6 +1258,9 @@ const bgContextService = {
           convId,
           status: 'ok',
           content: profileText,
+          wordCount,
+          truncated,
+          truncReason,
           time: nowTime,
           sheetSaved,
           rawCount: messages.length,

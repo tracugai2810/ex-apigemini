@@ -508,6 +508,9 @@ function applyTaggedCustomerSyncList_(taggedCustomers, untaggedConvIds) {
             ctxType: '',
             ctxTime: '',
             ctxError: '',
+            ctxWords: 0,
+            ctxTruncated: false,
+            ctxTruncReason: '',
             unlocked: false,
             initialScanned: false,
             detectedSerials: [],
@@ -735,7 +738,7 @@ function callGeminiRawServer_(modelName, apiKey, payload) {
   return JSON.parse(raw);
 }
 
-function callOpenAICompatibleServer_(baseUrl, modelName, apiKey, userPrompt, systemPrompt, temperature, topP) {
+function callOpenAICompatibleServer_(baseUrl, modelName, apiKey, userPrompt, systemPrompt, temperature, topP, withMeta) {
   if (!apiKey) throw new Error('Chưa cấu hình API Key cho provider này');
   if (!modelName) throw new Error('Chưa cấu hình tên Model');
   if (!baseUrl) throw new Error('Chưa cấu hình Base URL');
@@ -788,7 +791,40 @@ function callOpenAICompatibleServer_(baseUrl, modelName, apiKey, userPrompt, sys
   const json = JSON.parse(raw);
   const text = (json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content || '').trim();
   if (!text) throw new Error('[' + modelName + '] API trả về kết quả rỗng');
+  if (withMeta === true) {
+    return {
+      text: text,
+      finishReason: (json && json.choices && json.choices[0] && json.choices[0].finish_reason) || ''
+    };
+  }
   return text;
+}
+
+function countWordsServer_(text) {
+  const clean = String(text || '').trim();
+  if (!clean) return 0;
+  const tokens = clean.split(/\s+/);
+  let count = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    if (/[0-9A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/.test(tokens[i])) count++;
+  }
+  return count;
+}
+
+function detectProfileTruncationServer_(text, finishReason) {
+  const reason = String(finishReason || '').trim().toUpperCase();
+  if (reason && reason !== 'STOP' && reason !== 'END_TURN') {
+    return { truncated: true, reason: 'API dừng bất thường (' + reason + ')' };
+  }
+  const str = String(text || '').trim();
+  if (!str) {
+    return { truncated: true, reason: 'Hồ sơ rỗng' };
+  }
+  const hasSection3 = /(?:^|\n)\s*(?:[#*_>\-\s]*)(?:(?:3|III)\s*[\.\):]\s*(?:[#*_]*\s*)?(?:GHI\s*CHÚ|LƯU\s*Ý|TRẠNG\s*THÁI|TỔNG\s*KẾT|CHỐT|MÂU\s*THUẪN)|GHI\s*CHÚ\s*QUAN\s*TRỌNG|KHÔNG\s*MÂU\s*THUẪN)/i.test(str);
+  if (!hasSection3) {
+    return { truncated: true, reason: 'Thiếu Mục 3 (có thể bị cắt đoạn)' };
+  }
+  return { truncated: false, reason: '' };
 }
 
 function summarizeContextServer_(params) {
@@ -827,18 +863,30 @@ function summarizeContextServer_(params) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       let text = '';
+      let finishReason = '';
       if (settings.geminiBaseUrl && String(settings.geminiBaseUrl).trim()) {
-        text = callOpenAICompatibleServer_(settings.geminiBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null);
+        const aiMetaRes = callOpenAICompatibleServer_(settings.geminiBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null, true);
+        text = aiMetaRes.text;
+        finishReason = aiMetaRes.finishReason;
       } else {
         const payload = {
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: [{ text: userPrompt }] }]
         };
         const json = callGeminiRawServer_(useModel, apiKey, payload);
-        text = (json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text || '').trim();
+        const firstCand = json && json.candidates && json.candidates[0];
+        finishReason = (firstCand && firstCand.finishReason) ? String(firstCand.finishReason) : '';
+        text = (firstCand && firstCand.content && firstCand.content.parts && firstCand.content.parts[0] && firstCand.content.parts[0].text || '').trim();
       }
       if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
-      return text;
+      const wordCount = countWordsServer_(text);
+      const trunc = detectProfileTruncationServer_(text, finishReason);
+      return {
+        text: text,
+        wordCount: wordCount,
+        truncated: trunc.truncated,
+        truncReason: trunc.reason
+      };
     } catch (e) {
       lastErr = e;
       const msg = String(e && e.message || '').toLowerCase();
@@ -961,22 +1009,36 @@ function buildCustomerContextOnServer_(convId) {
       cust.ctxType = 'new_customer';
       cust.ctxTime = Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'dd/MM/yyyy HH:mm:ss');
       cust.ctxError = '';
+      cust.ctxWords = 0;
+      cust.ctxTruncated = false;
+      cust.ctxTruncReason = '';
       cust.unlocked = true;
       saveMobileCustomer_(cust);
       return cust;
     }
 
     const settings = getMobileSettings_();
-    const profileText = summarizeContextServer_({
+    const sumRes = summarizeContextServer_({
       settings: settings,
       customerName: finalName,
       gender: userMeta.gender,
       filteredLines: filteredLines
     });
+    const profileText = sumRes.text;
+    const wordCount = sumRes.wordCount;
+    const truncated = !!sumRes.truncated;
+    const truncReason = sumRes.truncReason || '';
 
     const nowTime = saveConvProfileToSheet_(cid, finalName, profileText);
     try {
-      const ctxCachePayload = JSON.stringify({ content: profileText, time: nowTime, savedAt: Date.now() });
+      const ctxCachePayload = JSON.stringify({
+        content: profileText,
+        wordCount: wordCount,
+        truncated: truncated,
+        truncReason: truncReason,
+        time: nowTime,
+        savedAt: Date.now()
+      });
       if (ctxCachePayload.length < 95000) {
         cache.put('ctx_res_' + cid, ctxCachePayload, 21600);
       }
@@ -985,6 +1047,9 @@ function buildCustomerContextOnServer_(convId) {
     cust.ctxType = 'ok';
     cust.ctxTime = nowTime;
     cust.ctxError = '';
+    cust.ctxWords = wordCount;
+    cust.ctxTruncated = truncated;
+    cust.ctxTruncReason = truncReason;
     cust.unlocked = true;
     saveMobileCustomer_(cust);
     return cust;
@@ -992,6 +1057,9 @@ function buildCustomerContextOnServer_(convId) {
     cust.ctxStatus = 'error';
     cust.ctxType = 'error_no_old';
     cust.ctxError = err && err.message ? err.message : 'Lỗi tải hoặc tổng hợp hồ sơ';
+    cust.ctxWords = 0;
+    cust.ctxTruncated = false;
+    cust.ctxTruncReason = '';
     cust.unlocked = true;
     saveMobileCustomer_(cust);
     return cust;
@@ -1438,6 +1506,15 @@ function mobileGetDashboardState(serialByConvMap) {
     if (cust.ctxStatus === 'done' && cust.ctxType === 'ok' && ctxCache && ctxCache.content) {
       cust.hasCtxCache = true;
       cust.cachedProfileText = ctxCache.content;
+      if (typeof cust.ctxWords !== 'number' || cust.ctxWords <= 0) {
+        cust.ctxWords = (typeof ctxCache.wordCount === 'number' && ctxCache.wordCount > 0)
+          ? ctxCache.wordCount
+          : countWordsServer_(ctxCache.content);
+      }
+      if (cust.ctxTruncated === undefined && ctxCache.truncated !== undefined) {
+        cust.ctxTruncated = !!ctxCache.truncated;
+        cust.ctxTruncReason = ctxCache.truncReason || '';
+      }
     } else {
       cust.hasCtxCache = false;
     }
@@ -1607,6 +1684,9 @@ function mobileClearContext(convId) {
     cust.ctxType = 'cleared';
     cust.ctxTime = '';
     cust.ctxError = '';
+    cust.ctxWords = 0;
+    cust.ctxTruncated = false;
+    cust.ctxTruncReason = '';
     cust.unlocked = true;
     saveMobileCustomer_(cust);
   }
@@ -2419,6 +2499,27 @@ function getMobileWebHtml_(initialStateJson) {
 '      return s.slice(0, 14);',
 '    }',
 '',
+'    function countWords(text) {',
+'      var clean = String(text || "").trim();',
+'      if (!clean) return 0;',
+'      var tokens = clean.split(/\\s+/);',
+'      var count = 0;',
+'      for (var i = 0; i < tokens.length; i++) {',
+'        if (/[0-9A-Za-z\\u00C0-\\u024F\\u1E00-\\u1EFF]/.test(tokens[i])) count++;',
+'      }',
+'      return count;',
+'    }',
+'',
+'    function detectProfileTruncation(text) {',
+'      var str = String(text || "").trim();',
+'      if (!str) return { truncated: true, reason: "Hồ sơ rỗng" };',
+'      var hasSection3 = /(?:^|\\n)\\s*(?:[#*_>\\-\\s]*)(?:(?:3|III)\\s*[\\.\\):]\\s*(?:[#*_]*\\s*)?(?:GHI\\s*CHÚ|LƯU\\s*Ý|TRẠNG\\s*THÁI|TỔNG\\s*KẾT|CHỐT|MÂU\\s*THUẪN)|GHI\\s*CHÚ\\s*QUAN\\s*TRỌNG|KHÔNG\\s*MÂU\\s*THUẪN)/i.test(str);',
+'      if (!hasSection3) {',
+'        return { truncated: true, reason: "Thiếu Mục 3 (có thể bị cắt đoạn)" };',
+'      }',
+'      return { truncated: false, reason: "" };',
+'    }',
+'',
 '    function getSavedProfile(convId) {',
 '      if (!convId) return null;',
 '      try {',
@@ -2433,10 +2534,18 @@ function getMobileWebHtml_(initialStateJson) {
 '      } catch (e) { return null; }',
 '    }',
 '',
-'    function saveProfileLocal(convId, content, time) {',
+'    function saveProfileLocal(convId, content, time, meta) {',
 '      if (!convId || !content) return;',
 '      try {',
-'        localStorage.setItem("sa_mob_ctx_" + convId, JSON.stringify({ content: content, time: time || "", savedAt: Date.now() }));',
+'        var payload = {',
+'          content: content,',
+'          time: time || "",',
+'          wordCount: (meta && typeof meta.wordCount === "number" && meta.wordCount > 0) ? meta.wordCount : countWords(content),',
+'          truncated: (meta && meta.truncated !== undefined) ? !!meta.truncated : detectProfileTruncation(content).truncated,',
+'          truncReason: (meta && meta.truncReason) ? String(meta.truncReason) : "",',
+'          savedAt: Date.now()',
+'        };',
+'        localStorage.setItem("sa_mob_ctx_" + convId, JSON.stringify(payload));',
 '      } catch (e) {}',
 '    }',
 '',
@@ -2542,7 +2651,11 @@ function getMobileWebHtml_(initialStateJson) {
 '        }',
 '        if (c.hasCtxCache && c.cachedProfileText) {',
 '          if (!(state.ctxCopyClearing[c.convId] && state.ctxCopyClearing[c.convId] === c.ctxTime)) {',
-'            saveProfileLocal(c.convId, c.cachedProfileText, c.ctxTime);',
+'            saveProfileLocal(c.convId, c.cachedProfileText, c.ctxTime, {',
+'              wordCount: c.ctxWords,',
+'              truncated: c.ctxTruncated,',
+'              truncReason: c.ctxTruncReason',
+'            });',
 '          }',
 '        } else {',
 '          delete state.ctxCopyClearing[c.convId];',
@@ -2831,12 +2944,29 @@ function getMobileWebHtml_(initialStateJson) {
 '      var isResetting = !!state.ctxResetting[convId];',
 '      var isBusyCtx = isResetting || cust.ctxStatus === "running";',
 '',
+'      var localProf = getSavedProfile(convId);',
+'      var wc = (typeof cust.ctxWords === "number" && cust.ctxWords > 0)',
+'        ? cust.ctxWords',
+'        : ((localProf && typeof localProf.wordCount === "number" && localProf.wordCount > 0)',
+'          ? localProf.wordCount',
+'          : ((localProf && localProf.content) ? countWords(localProf.content) : 0));',
+'      var fallbackTrunc = (cust.ctxTruncated === undefined && localProf && localProf.content && localProf.truncated === undefined)',
+'        ? detectProfileTruncation(localProf.content)',
+'        : null;',
+'      var isTrunc = (cust.ctxTruncated === true) || !!(localProf && localProf.truncated) || !!(fallbackTrunc && fallbackTrunc.truncated);',
+'      var truncReason = cust.ctxTruncReason || (localProf && localProf.truncReason) || (fallbackTrunc && fallbackTrunc.reason) || "Thiếu Mục 3 (có thể bị cắt đoạn)";',
+'      var shortT = formatShortTime(cust.ctxTime);',
+'',
 '      ctxBtn.className = "btn-ctx-main";',
 '      subnote.className = "ctx-subnote";',
 '      ctxBtn.disabled = false;',
 '      resetBtn.disabled = false;',
 '      resetBtn.textContent = "🔄";',
-'      timeBadge.textContent = cust.ctxTime || "";',
+'      if (cust.ctxTime && wc > 0 && cust.ctxStatus === "done" && cust.ctxType === "ok") {',
+'        timeBadge.textContent = (isTrunc ? "⚠️ " : "") + wc + " từ • " + shortT;',
+'      } else {',
+'        timeBadge.textContent = cust.ctxTime || "";',
+'      }',
 '',
 '      if (isResetting) {',
 '        ctxBtn.classList.add("running");',
@@ -2860,11 +2990,21 @@ function getMobileWebHtml_(initialStateJson) {
 '        ctxBtn.classList.add("new");',
 '        ctxBtn.textContent = "✅ Khách mới";',
 '        subnote.textContent = "Đoạn chat chưa có tin nhắn chữ. Bấm lại để quét lại nếu cần.";',
-'      } else if (cust.ctxStatus === "done" && cust.ctxType === "ok" && !state.ctxCopyClearing[convId] && ((getSavedProfile(convId) && getSavedProfile(convId).content) || cust.hasCtxCache)) {',
-'        var shortT = formatShortTime(cust.ctxTime);',
-'        ctxBtn.classList.add("ready");',
-'        ctxBtn.textContent = "📋 Copy HS" + (shortT ? (" (" + shortT + ")") : "");',
-'        subnote.textContent = "Cập nhật: " + (cust.ctxTime || shortT || "mới nhất") + " — Bấm để Copy Hồ sơ ngữ cảnh. Gemini/Khác đã mở khóa!";',
+'      } else if (cust.ctxStatus === "done" && cust.ctxType === "ok" && !state.ctxCopyClearing[convId] && ((localProf && localProf.content) || cust.hasCtxCache)) {',
+'        var metaParts = [];',
+'        if (wc > 0) metaParts.push(wc + " từ");',
+'        if (shortT) metaParts.push(shortT);',
+'        var metaStr = metaParts.length ? (" (" + metaParts.join(" • ") + ")") : "";',
+'        if (isTrunc) {',
+'          ctxBtn.classList.add("warn");',
+'          ctxBtn.textContent = "⚠️ Copy HS" + metaStr;',
+'          subnote.classList.add("err");',
+'          subnote.textContent = "⚠️ Hồ sơ có thể bị cắt đoạn (" + truncReason + ") — " + (wc > 0 ? (wc + " từ — ") : "") + "Nên bấm Copy kiểm tra hoặc bấm 🔄/📋 lấy lại.";',
+'        } else {',
+'          ctxBtn.classList.add("ready");',
+'          ctxBtn.textContent = "📋 Copy HS" + metaStr;',
+'          subnote.textContent = (wc > 0 ? (wc + " từ — ") : "") + "Cập nhật: " + (cust.ctxTime || shortT || "mới nhất") + " — Bấm để Copy Hồ sơ ngữ cảnh. Gemini/Khác đã mở khóa!";',
+'        }',
 '      } else if (cust.ctxType === "cleared") {',
 '        ctxBtn.textContent = "📋 Hồ sơ";',
 '        subnote.textContent = "🔄 Đã xóa ngữ cảnh trên Sheet & mở khóa Gemini/Khác để luận mới!";',
@@ -3171,13 +3311,18 @@ function getMobileWebHtml_(initialStateJson) {
 '            triggerBuildContext(cid);',
 '            return;',
 '          }',
-'          saveProfileLocal(cid, txt, cust.ctxTime);',
+'          saveProfileLocal(cid, txt, cust.ctxTime, {',
+'            wordCount: cust.ctxWords,',
+'            truncated: cust.ctxTruncated,',
+'            truncReason: cust.ctxTruncReason',
+'          });',
 '          var ok2 = await copyTextSafe(txt);',
 '          if (ok2) {',
 '            finishProfileCopied(cid, cust);',
 '            showToast("📋 Đã copy Hồ sơ ngữ cảnh!", "success");',
 '          } else {',
-'            $("profileModalTitle").textContent = "📋 Hồ sơ: " + (cust.customerName || "Khách");',
+'            var modalWc = (typeof cust.ctxWords === "number" && cust.ctxWords > 0) ? cust.ctxWords : countWords(txt);',
+'            $("profileModalTitle").textContent = "📋 Hồ sơ: " + (cust.customerName || "Khách") + (modalWc > 0 ? (" (" + modalWc + " từ)") : "");',
 '            $("profileModalText").textContent = txt;',
 '            $("profileModal").classList.add("open");',
 '            syncContextAndAiButtons(cust);',
@@ -3206,15 +3351,27 @@ function getMobileWebHtml_(initialStateJson) {
 '      runGas("mobileBuildContext", convId).then(function(res) {',
 '        if (res && res.customer) {',
 '          if (res.profileText && res.customer.ctxStatus === "done" && res.customer.ctxType === "ok") {',
-'            saveProfileLocal(convId, res.profileText, res.customer.ctxTime);',
+'            saveProfileLocal(convId, res.profileText, res.customer.ctxTime, {',
+'              wordCount: res.customer.ctxWords,',
+'              truncated: res.customer.ctxTruncated,',
+'              truncReason: res.customer.ctxTruncReason',
+'            });',
 '            state.ctxLocalOnly[convId] = res.customer.ctxTime;',
 '          }',
 '          var idx = state.customers.findIndex(function(c) { return c.convId === convId; });',
 '          if (idx >= 0) state.customers[idx] = res.customer;',
 '          renderAll();',
 '          if (res.customer.ctxStatus === "done") {',
-'            if (res.customer.ctxType === "new_customer") showToast("✅ Khách mới — đã mở khóa Gemini/Khác!", "success");',
-'            else showToast("✅ Đã tổng hợp xong! Bấm 📋 Copy HS để copy.", "success");',
+'            if (res.customer.ctxType === "new_customer") {',
+'              showToast("✅ Khách mới — đã mở khóa Gemini/Khác!", "success");',
+'            } else {',
+'              var wcDone = (typeof res.customer.ctxWords === "number" && res.customer.ctxWords > 0) ? res.customer.ctxWords : (res.profileText ? countWords(res.profileText) : 0);',
+'              if (res.customer.ctxTruncated) {',
+'                showToast("⚠️ Hồ sơ có thể bị cắt đoạn (" + wcDone + " từ" + (res.customer.ctxTruncReason ? (" — " + res.customer.ctxTruncReason) : "") + ")! Nên kiểm tra lại.", "warning", 4500);',
+'              } else {',
+'                showToast("✅ Đã tổng hợp xong" + (wcDone > 0 ? (" (" + wcDone + " từ)") : "") + "! Bấm 📋 Copy HS để copy.", "success");',
+'              }',
+'            }',
 '          } else if (res.customer.ctxStatus === "error") {',
 '            showToast("⚠️ Tạo HS lỗi (" + res.customer.ctxError + "), đã mở khóa Gemini/Khác.", "warning");',
 '          }',

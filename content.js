@@ -468,6 +468,33 @@ try {
         return s.slice(0, 14);
       },
 
+      countWords(text) {
+        const clean = String(text || '').trim();
+        if (!clean) return 0;
+        const tokens = clean.split(/\s+/);
+        let count = 0;
+        for (const tk of tokens) {
+          if (/[0-9A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/.test(tk)) count++;
+        }
+        return count;
+      },
+
+      detectProfileTruncation(text, finishReason = '') {
+        const reason = String(finishReason || '').trim().toUpperCase();
+        if (reason && reason !== 'STOP' && reason !== 'END_TURN') {
+          return { truncated: true, reason: `API dừng bất thường (${reason})` };
+        }
+        const str = String(text || '').trim();
+        if (!str) {
+          return { truncated: true, reason: 'Hồ sơ rỗng' };
+        }
+        const hasSection3 = /(?:^|\n)\s*(?:[#*_>\-\s]*)(?:(?:3|III)\s*[\.\):]\s*(?:[#*_]*\s*)?(?:GHI\s*CHÚ|LƯU\s*Ý|TRẠNG\s*THÁI|TỔNG\s*KẾT|CHỐT|MÂU\s*THUẪN)|GHI\s*CHÚ\s*QUAN\s*TRỌNG|KHÔNG\s*MÂU\s*THUẪN)/i.test(str);
+        if (!hasSection3) {
+          return { truncated: true, reason: 'Thiếu Mục 3 (có thể bị cắt đoạn)' };
+        }
+        return { truncated: false, reason: '' };
+      },
+
       async getContextMeta(convId, force = false) {
         const self = SapoAuto_v1;
         if (!convId || convId === 'default') return { hasContext: false, updatedAt: '' };
@@ -1110,12 +1137,26 @@ try {
 
             if (hasValidCtx && (ctxData.type === 'ok' || ctxData.type === 'fallback') && ctxData.content) {
               const shortT = self.utils.formatShortTime(ctxData.time);
+              const wordCount = (typeof ctxData.wordCount === 'number' && ctxData.wordCount > 0)
+                ? ctxData.wordCount
+                : self.utils.countWords(ctxData.content);
               const isFallback = ctxData.type === 'fallback';
-              ctxBtn.textContent = (isFallback ? "⚠️ Copy HS cũ" : "📋 Copy HS") + (shortT ? ` (${shortT})` : "");
-              ctxBtn.classList.add(isFallback ? "sa-ctx-warn" : "sa-ctx-ready");
+              const fallbackTrunc = (!isFallback && ctxData.truncated === undefined)
+                ? self.utils.detectProfileTruncation(ctxData.content)
+                : null;
+              const isTruncated = !isFallback && (ctxData.truncated === true || !!(fallbackTrunc && fallbackTrunc.truncated));
+              const truncReason = ctxData.truncReason || (fallbackTrunc && fallbackTrunc.reason) || '';
+              const metaParts = [];
+              if (wordCount > 0) metaParts.push(`${wordCount} từ`);
+              if (shortT) metaParts.push(shortT);
+              const metaStr = metaParts.length ? ` (${metaParts.join(' • ')})` : '';
+              ctxBtn.textContent = (isFallback ? "⚠️ Copy HS cũ" : (isTruncated ? "⚠️ Copy HS" : "📋 Copy HS")) + metaStr;
+              ctxBtn.classList.add((isFallback || isTruncated) ? "sa-ctx-warn" : "sa-ctx-ready");
               ctxBtn.title = isFallback
-                ? `Tạo mới lỗi (${ctxData.error || 'API'}) -> Bấm copy bản cũ trên Sheet${ctxData.time ? ` (${ctxData.time})` : ''}`
-                : `Cập nhật: ${ctxData.time || shortT || 'mới nhất'} — Bấm để Copy Hồ sơ ngữ cảnh (dán vào Gemini web). Gemini/Khác đã mở khóa!`;
+                ? `Tạo mới lỗi (${ctxData.error || 'API'}) -> Bấm copy bản cũ trên Sheet (${wordCount} từ${ctxData.time ? ` • ${ctxData.time}` : ''})`
+                : (isTruncated
+                  ? `⚠️ Hồ sơ có thể bị cắt đoạn (${truncReason}) — ${wordCount} từ${ctxData.time ? ` • ${ctxData.time}` : ''}. Bấm để Copy kiểm tra hoặc bấm 🔄/📋 lấy lại.`
+                  : `${wordCount} từ — Cập nhật: ${ctxData.time || shortT || 'mới nhất'} — Bấm để Copy Hồ sơ ngữ cảnh (dán vào Gemini web). Gemini/Khác đã mở khóa!`);
               ctxBtn.onclick = async (e) => {
                 e.stopPropagation(); e.preventDefault();
                 try {
@@ -2134,15 +2175,23 @@ try {
             const { customerName, message } = msg;
             self.utils.toast(`📋 [${customerName || 'Hồ sơ'}] ${message}`, "info");
           } else if (msg.action === 'CTX_DONE') {
-            const { serial, convId, status, time, error, customerName, rawCount, filteredCount, sheetSaved } = msg;
+            const { serial, convId, status, time, error, customerName, rawCount, filteredCount, sheetSaved, wordCount, truncated, truncReason } = msg;
             self.utils.stopKeepAlivePort('ctx_' + serial);
             if (status === 'ok') {
               self.STATE.contextMetaCache.set(convId, { hasContext: true, updatedAt: time || '', fetchedAt: Date.now() });
-              self.utils.toast(
-                `✅ [${customerName || serial}] Xong Hồ sơ (${filteredCount || 0}/${rawCount || 0} tin)${sheetSaved === false ? ' ⚠️ Lỗi lưu Sheet' : ''}! Đã mở khóa Gemini/Khác.`,
-                "success",
-                5000
-              );
+              if (truncated) {
+                self.utils.toast(
+                  `⚠️ [${customerName || serial}] Hồ sơ có thể bị cắt đoạn (${wordCount || 0} từ${truncReason ? ` — ${truncReason}` : ''})${sheetSaved === false ? ' ⚠️ Lỗi lưu Sheet' : ''}! Kiểm tra hoặc bấm lấy lại.`,
+                  "warning",
+                  6000
+                );
+              } else {
+                self.utils.toast(
+                  `✅ [${customerName || serial}] Xong Hồ sơ (${wordCount ? `${wordCount} từ • ` : ''}${filteredCount || 0}/${rawCount || 0} tin)${sheetSaved === false ? ' ⚠️ Lỗi lưu Sheet' : ''}! Đã mở khóa Gemini/Khác.`,
+                  "success",
+                  5000
+                );
+              }
             } else if (status === 'new_customer') {
               self.utils.toast(`✅ [${customerName || serial}] Khách mới! Đã mở khóa Gemini/Khác.`, "success", 4000);
             } else if (status === 'fallback') {
