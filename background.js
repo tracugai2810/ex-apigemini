@@ -354,6 +354,9 @@ const bgAiService = {
       rewriteTemperature: '',
       rewriteTopP: '',
       customRewriteGeminiModels: [],
+      profileGeminiApiKey: '',
+      profileGeminiModel: 'gemini-3.5-flash-lite',
+      customProfileGeminiModels: [],
       syncSheetUrl: '',
       luchaoUrl: 'https://dshc-luc-hao.vercel.app/',
       customAiBaseUrl: '',
@@ -392,6 +395,22 @@ const bgAiService = {
       rwBaseUrl = (customRwItem.baseUrl || '').trim();
     }
 
+    const customProfModels = data.customProfileGeminiModels || [];
+    const profModelVal = (data.profileGeminiModel || '').trim() || 'gemini-3.5-flash-lite';
+    const customProfItem = customProfModels.find(m => m && m.value === profModelVal);
+
+    let profType = 'gemini';
+    let profModel = profModelVal;
+    let profKey = (data.profileGeminiApiKey || '').trim() || (data.geminiApiKey || '').trim();
+    let profBaseUrl = '';
+
+    if (customProfItem && (customProfItem.type === 'openai_compatible' || customProfItem.baseUrl)) {
+      profType = 'openai_compatible';
+      profModel = customProfItem.model || customProfItem.value;
+      profKey = (customProfItem.apiKey || '').trim();
+      profBaseUrl = (customProfItem.baseUrl || '').trim();
+    }
+
     const rwTemp = (data.rewriteTemperature !== '' && data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && !isNaN(parseFloat(data.rewriteTemperature))) ? parseFloat(data.rewriteTemperature) : null;
     const rwTopP = (data.rewriteTopP !== '' && data.rewriteTopP !== undefined && data.rewriteTopP !== null && !isNaN(parseFloat(data.rewriteTopP))) ? parseFloat(data.rewriteTopP) : null;
     const aiTemp = (data.aiTemperature !== '' && data.aiTemperature !== undefined && data.aiTemperature !== null && !isNaN(parseFloat(data.aiTemperature))) ? parseFloat(data.aiTemperature) : null;
@@ -406,6 +425,10 @@ const bgAiService = {
       rewriteModel: rwModel,
       rewriteTemperature: rwTemp,
       rewriteTopP: rwTopP,
+      profileType: profType,
+      profileBaseUrl: profBaseUrl,
+      profileApiKey: profKey,
+      profileModel: profModel,
       syncSheetUrl: (data.syncSheetUrl || '').trim(),
       luchaoUrl: data.luchaoUrl || 'https://dshc-luc-hao.vercel.app/',
       customAiBaseUrl: customBase,
@@ -586,7 +609,7 @@ const bgAiService = {
   },
 
   // === GỌI API OPENAI-COMPATIBLE (GLM, OpenRouter, DeepSeek, v.v.) ===
-  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '', temperature = null, topP = null) {
+  async callOpenAICompatible(baseUrl, modelName, apiKey, promptText, timeoutMs = 120000, systemPrompt = '', temperature = null, topP = null, withMeta = false) {
     if (!apiKey) throw new Error("Chưa cấu hình API Key cho provider này");
     if (!modelName) throw new Error("Chưa cấu hình tên Model");
 
@@ -644,6 +667,12 @@ const bgAiService = {
       const json = await res.json();
       const text = (json.choices?.[0]?.message?.content || "").trim();
       if (!text) throw new Error(`[${modelName}] API trả về kết quả rỗng`);
+      if (withMeta === true) {
+        return {
+          text,
+          finishReason: json.choices?.[0]?.finish_reason || ''
+        };
+      }
       return text;
     } finally {
       clearTimeout(timeoutId);
@@ -1080,9 +1109,15 @@ const bgContextService = {
     return { truncated: false, reason: '' };
   },
 
-  async summarizeContext({ apiKey, model, customerName, gender, filteredLines }) {
-    if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key');
+  async summarizeContext({ providerType = 'gemini', baseUrl = '', apiKey, model, customerName, gender, filteredLines }) {
     const useModel = model || 'gemini-3.5-flash-lite';
+    if (providerType === 'openai_compatible') {
+      if (!baseUrl) throw new Error('Chưa cấu hình Base URL cho Model Hồ sơ');
+      if (!apiKey) throw new Error('Chưa cấu hình API Key cho Model Hồ sơ');
+      if (!useModel) throw new Error('Chưa cấu hình tên Model Hồ sơ');
+    } else {
+      if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key');
+    }
 
     const systemPrompt = [
       'Bạn là trợ lý phân tích và lập hồ sơ khách hàng xem Kinh Dịch Lục Hào.',
@@ -1116,10 +1151,18 @@ const bgContextService = {
     let lastErr = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        const json = await bgAiService.callModel(useModel, apiKey, payload, 120000);
-        const text = (json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        let text = '';
+        let finishReason = '';
+        if (providerType === 'openai_compatible') {
+          const aiMeta = await bgAiService.callOpenAICompatible(baseUrl, useModel, apiKey, userPrompt, 120000, systemPrompt, null, null, true);
+          text = aiMeta.text;
+          finishReason = aiMeta.finishReason || '';
+        } else {
+          const json = await bgAiService.callModel(useModel, apiKey, payload, 120000);
+          text = (json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+          finishReason = json?.candidates?.[0]?.finishReason || '';
+        }
         if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
-        const finishReason = json?.candidates?.[0]?.finishReason || '';
         const wordCount = this.countWords(text);
         const truncInfo = this.detectProfileTruncation(text, finishReason);
         return {
@@ -1211,12 +1254,14 @@ const bgContextService = {
         return;
       }
 
-      const useModel = settings.model || 'gemini-3.5-flash-lite';
+      const useModel = settings.profileModel || 'gemini-3.5-flash-lite';
       sendStatus(`Đã đọc ${messages.length} tin (lọc ${filteredLines.length} tin). Đang tổng hợp (${useModel})...`);
 
       try {
         const summaryRes = await this.summarizeContext({
-          apiKey: settings.apiKey,
+          providerType: settings.profileType,
+          baseUrl: settings.profileBaseUrl,
+          apiKey: settings.profileApiKey,
           model: useModel,
           customerName: finalName,
           gender: userMeta.gender,

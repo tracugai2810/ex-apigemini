@@ -64,7 +64,11 @@ const MOB_DEFAULT_SETTINGS = {
   rewriteApiKey: '',
   rewriteModel: 'gemini-3.5-flash-lite',
   rewriteTemperature: '',
-  rewriteTopP: ''
+  rewriteTopP: '',
+  profileType: 'gemini',
+  profileBaseUrl: '',
+  profileApiKey: '',
+  profileModel: 'gemini-3.5-flash-lite'
 };
 
 // ===================================================================
@@ -829,9 +833,18 @@ function detectProfileTruncationServer_(text, finishReason) {
 
 function summarizeContextServer_(params) {
   const settings = params.settings;
-  const apiKey = String(settings.geminiApiKey || '').trim();
-  if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key trong Cài đặt Web Mobile');
-  const useModel = String(settings.geminiModel || 'gemini-3.5-flash-lite').trim();
+  const profType = String(settings.profileType || 'gemini').trim();
+  const profBaseUrl = String(settings.profileBaseUrl || '').trim();
+  const useModel = String(settings.profileModel || 'gemini-3.5-flash-lite').trim();
+  const apiKey = String(settings.profileApiKey || '').trim() || (profType === 'openai_compatible' ? '' : String(settings.geminiApiKey || '').trim());
+
+  if (profType === 'openai_compatible') {
+    if (!profBaseUrl) throw new Error('Chưa cấu hình Base URL cho Model Hồ sơ trong Cài đặt Web Mobile');
+    if (!apiKey) throw new Error('Chưa cấu hình API Key cho Model Hồ sơ trong Cài đặt Web Mobile');
+    if (!useModel) throw new Error('Chưa cấu hình tên Model Hồ sơ trong Cài đặt Web Mobile');
+  } else {
+    if (!apiKey) throw new Error('Chưa cấu hình Gemini API Key trong Cài đặt Web Mobile');
+  }
 
   // Dùng NGUYÊN VĂN 100% prompt tổng hợp hồ sơ từ background.js
   const systemPrompt = [
@@ -864,8 +877,8 @@ function summarizeContextServer_(params) {
     try {
       let text = '';
       let finishReason = '';
-      if (settings.geminiBaseUrl && String(settings.geminiBaseUrl).trim()) {
-        const aiMetaRes = callOpenAICompatibleServer_(settings.geminiBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null, true);
+      if (profType === 'openai_compatible') {
+        const aiMetaRes = callOpenAICompatibleServer_(profBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null, true);
         text = aiMetaRes.text;
         finishReason = aiMetaRes.finishReason;
       } else {
@@ -2215,7 +2228,7 @@ function getMobileWebHtml_(initialStateJson) {
 '        </div>',
 '',
 '        <div class="settings-box">',
-'          <div class="settings-box-title">🤖 Gemini AI (Nút Gemini &amp; Tạo Hồ Sơ)</div>',
+'          <div class="settings-box-title">🤖 Gemini AI (Nút Gemini)</div>',
 '          <div class="field-group">',
 '            <label>Gemini API Key</label>',
 '            <input type="password" class="form-input" id="setGeminiApiKey" placeholder="AIzaSy...">',
@@ -2301,6 +2314,29 @@ function getMobileWebHtml_(initialStateJson) {
 '              <label>Top P</label>',
 '              <input type="number" step="0.05" min="0" max="1" class="form-input" id="setRwTopP" placeholder="0.8">',
 '            </div>',
+'          </div>',
+'        </div>',
+'',
+'        <div class="settings-box">',
+'          <div class="settings-box-title">📋 AI Tổng hợp Hồ sơ (Nút 📋 Hồ sơ)</div>',
+'          <div class="field-group">',
+'            <label>Nhà cung cấp</label>',
+'            <select class="form-select" id="setProfType">',
+'              <option value="gemini">Google Gemini (Dùng API Gemini)</option>',
+'              <option value="openai_compatible">Model Ngoài (OpenAI-Compatible)</option>',
+'            </select>',
+'          </div>',
+'          <div class="field-group" id="profBaseUrlGroup" style="display:none;">',
+'            <label>Base URL Hồ sơ</label>',
+'            <input type="url" class="form-input" id="setProfBaseUrl" placeholder="https://openrouter.ai/api/v1">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>API Key Hồ sơ (Để trống = dùng chung Gemini Key nếu chọn Gemini)</label>',
+'            <input type="password" class="form-input" id="setProfApiKey" placeholder="Để trống nếu dùng chung key trên">',
+'          </div>',
+'          <div class="field-group">',
+'            <label>Tên Model Hồ sơ</label>',
+'            <input type="text" class="form-input" id="setProfModel" placeholder="gemini-3.5-flash-lite">',
 '          </div>',
 '        </div>',
 '      </div>',
@@ -3555,6 +3591,12 @@ function getMobileWebHtml_(initialStateJson) {
 '      $("setRwTemp").value = s.rewriteTemperature !== undefined ? s.rewriteTemperature : "";',
 '      $("setRwTopP").value = s.rewriteTopP !== undefined ? s.rewriteTopP : "";',
 '',
+'      $("setProfType").value = s.profileType || "gemini";',
+'      $("profBaseUrlGroup").style.display = ($("setProfType").value === "openai_compatible") ? "block" : "none";',
+'      $("setProfBaseUrl").value = s.profileBaseUrl || "";',
+'      $("setProfApiKey").value = s.profileApiKey || "";',
+'      $("setProfModel").value = s.profileModel || "gemini-3.5-flash-lite";',
+'',
 '      $("settingsModal").classList.add("open");',
 '    }',
 '',
@@ -3568,6 +3610,9 @@ function getMobileWebHtml_(initialStateJson) {
 '    };',
 '    $("setRwType").onchange = function() {',
 '      $("rwBaseUrlGroup").style.display = ($("setRwType").value === "openai_compatible") ? "block" : "none";',
+'    };',
+'    $("setProfType").onchange = function() {',
+'      $("profBaseUrlGroup").style.display = ($("setProfType").value === "openai_compatible") ? "block" : "none";',
 '    };',
 '    document.querySelectorAll(".preset-pill").forEach(function(pill) {',
 '      pill.onclick = function() {',
@@ -3601,7 +3646,11 @@ function getMobileWebHtml_(initialStateJson) {
 '        rewriteApiKey: ($("setRwApiKey").value || "").trim(),',
 '        rewriteModel: ($("setRwModel").value || "gemini-3.5-flash-lite").trim(),',
 '        rewriteTemperature: ($("setRwTemp").value || "").trim(),',
-'        rewriteTopP: ($("setRwTopP").value || "").trim()',
+'        rewriteTopP: ($("setRwTopP").value || "").trim(),',
+'        profileType: $("setProfType").value || "gemini",',
+'        profileBaseUrl: ($("setProfBaseUrl").value || "").trim(),',
+'        profileApiKey: ($("setProfApiKey").value || "").trim(),',
+'        profileModel: ($("setProfModel").value || "gemini-3.5-flash-lite").trim()',
 '      };',
 '      $("btnSaveSettings").textContent = "⏳ Đang lưu...";',
 '      $("btnSaveSettings").disabled = true;',

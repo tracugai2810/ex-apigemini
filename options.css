@@ -209,36 +209,6 @@ input:focus:not(.toggle),
   gap: 8px;
 }
 
-.info-tile {
-  margin-bottom: 10px;
-  padding: 10px;
-  background: #0f172a;
-  border-radius: 8px;
-  border: 1px solid #334155;
-}
-.info-tile-last { margin-bottom: 0; }
-.info-tile-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.info-tile-title {
-  color: #f1f5f9;
-  font-weight: 600;
-  font-size: 12.5px;
-}
-.role-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  color: #fff;
-  font-weight: 700;
-  font-size: 11px;
-}
-.role-badge-gemini { background: #059669; }
-.role-badge-other { background: #16a34a; }
-
 /* Toggle switch */
 .toggle-row {
   display: flex;

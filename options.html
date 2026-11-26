@@ -73,6 +73,29 @@
         <p class="hint hint-sm">Chuẩn OpenAI-Compatible. Hỗ trợ mọi nhà cung cấp như Z.AI (GLM), OpenRouter, DeepSeek... Mỗi cấu hình lưu trọn bộ (Base URL + API Key + Model). Chọn bên nào là tự động nạp toàn bộ thông tin bên đó.</p>
       </section>
 
+      <!-- TINH CHỈNH ĐỘ BAY BỔNG & LOGIC -->
+      <section class="card">
+        <h2>🌡️ Tinh chỉnh Độ bay bổng &amp; Logic (Cả 2 Nút)</h2>
+        <div class="row">
+          <div class="field">
+            <label for="aiTemperature">Độ bay bổng (Temperature)</label>
+            <input type="number" id="aiTemperature" step="0.05" min="0" max="2" placeholder="0.3">
+            <p class="hint hint-sm">
+              <b>0.1 – 0.3:</b> Chuẩn logic, kỷ luật.<br>
+              <b>0.4 – 0.6:</b> Cân bằng, luận tượng hay.<br>
+              <b>0.7+:</b> Bay bổng cao. (Để trống = Mặc định)
+            </p>
+          </div>
+          <div class="field">
+            <label for="aiTopP">Bộ lọc chuẩn xác (Top P)</label>
+            <input type="number" id="aiTopP" step="0.05" min="0" max="1" placeholder="0.85">
+            <p class="hint hint-sm">
+              Lọc bỏ từ ngữ vô lý, giữ câu chữ gãy gọn. (Để trống = Mặc định, đề xuất: 0.85 – 0.95)
+            </p>
+          </div>
+        </div>
+      </section>
+
       <!-- AI VIẾT LẠI (GEMINI & MODEL NGOÀI) -->
       <section class="card">
         <h2>✍️ Cấu hình AI Viết Lại (Gemini &amp; Nhà cung cấp khác)</h2>
@@ -137,47 +160,54 @@
         </div>
       </section>
 
-      <!-- TINH CHỈNH ĐỘ BAY BỔNG & LOGIC -->
+      <!-- AI TỔNG HỢP HỒ SƠ (GEMINI & MODEL NGOÀI) -->
       <section class="card">
-        <h2>🌡️ Tinh chỉnh Độ bay bổng &amp; Logic (Cả 2 Nút)</h2>
-        <div class="row">
-          <div class="field">
-            <label for="aiTemperature">Độ bay bổng (Temperature)</label>
-            <input type="number" id="aiTemperature" step="0.05" min="0" max="2" placeholder="0.3">
-            <p class="hint hint-sm">
-              <b>0.1 – 0.3:</b> Chuẩn logic, kỷ luật.<br>
-              <b>0.4 – 0.6:</b> Cân bằng, luận tượng hay.<br>
-              <b>0.7+:</b> Bay bổng cao. (Để trống = Mặc định)
-            </p>
+        <h2>📋 Cấu hình AI Tổng hợp Hồ sơ (Gemini &amp; Nhà cung cấp khác)</h2>
+        <label for="profileGeminiApiKey">Gemini API Key (Tùy chọn)</label>
+        <input type="password" id="profileGeminiApiKey" placeholder="Để trống nếu dùng chung API Key ở trên">
+        <p class="hint">Dùng khi chọn model Gemini. Nếu để trống, tự động dùng chung Gemini API Key ở mục trên.</p>
+
+        <label for="profileGeminiModel">Model AI Hồ Sơ</label>
+        <input type="hidden" id="profileGeminiModel" value="gemini-3.5-flash-lite">
+        <div class="model-dropdown-container" id="profileModelDropdownContainer">
+          <div class="model-dropdown-toggle" id="profileModelDropdownToggle">
+            <span id="profileModelDropdownLabel">🏆 Gemini 3.5 Flash Lite — 500 lượt/ngày</span>
+            <span class="model-dropdown-arrow">▾</span>
           </div>
-          <div class="field">
-            <label for="aiTopP">Bộ lọc chuẩn xác (Top P)</label>
-            <input type="number" id="aiTopP" step="0.05" min="0" max="1" placeholder="0.85">
-            <p class="hint hint-sm">
-              Lọc bỏ từ ngữ vô lý, giữ câu chữ gãy gọn. (Để trống = Mặc định, đề xuất: 0.85 – 0.95)
-            </p>
+          <div class="model-dropdown-list" id="profileModelDropdownList" style="display:none;">
+            <!-- Danh sách model được render bởi JS -->
+            <div class="model-add-row">
+              <input type="text" id="addCustomProfileModelInput" placeholder="Thêm mã Gemini (VD: gemini-2.0-flash...)">
+              <button type="button" id="btnAddCustomProfileModel" title="Thêm model Gemini">➕</button>
+            </div>
           </div>
         </div>
-      </section>
+        <p class="hint hint-sm">Model chuyên dụng để đọc lịch sử tin nhắn Sapo và tổng hợp Hồ sơ ngữ cảnh (nút 📋 Hồ sơ).</p>
 
-      <!-- CẤU HÌNH 2 NÚT LUẬN QUẺ SONG SONG -->
-      <section class="card">
-        <h2>🎯 Hoạt Động Của 2 Nút Luận Quẻ Song Song</h2>
-
-        <div class="info-tile">
-          <div class="info-tile-head">
-            <span class="role-badge role-badge-gemini">NÚT GEMINI</span>
-            <span class="info-tile-title">🔍 Gemini AI (Cố định)</span>
+        <!-- KHỐI THÊM MODEL NGOÀI (OpenAI-Compatible: RadoxAI, Claude, DeepSeek...) -->
+        <div class="sub-box sub-box-dashed">
+          <div class="sub-box-title">
+            ➕ Thêm Model Ngoài (RadoxAI, Claude, OpenAI, DeepSeek...)
           </div>
-          <p class="hint hint-sm">Luôn dùng API &amp; Model ở mục <b>Gemini AI</b> để luận quẻ.</p>
-        </div>
-
-        <div class="info-tile info-tile-last">
-          <div class="info-tile-head">
-            <span class="role-badge role-badge-other">NÚT KHÁC</span>
-            <span class="info-tile-title">🤖 Model Phụ (Z.AI / OpenRouter / DeepSeek...)</span>
+          <div class="sub-box-stack">
+            <div>
+              <label for="addExtProfileBaseUrl" class="label-compact">Base URL</label>
+              <input type="text" id="addExtProfileBaseUrl" class="input-compact" placeholder="https://radoxai.com/v1 hoặc https://openrouter.ai/api/v1">
+            </div>
+            <div class="row row-compact">
+              <div class="field">
+                <label for="addExtProfileApiKey" class="label-compact">API Key</label>
+                <input type="password" id="addExtProfileApiKey" class="input-compact" placeholder="API Key của bên cung cấp">
+              </div>
+              <div class="field">
+                <label for="addExtProfileModel" class="label-compact">Mã Model</label>
+                <input type="text" id="addExtProfileModel" class="input-compact" placeholder="claude-sonnet-5">
+              </div>
+            </div>
+            <div class="card-actions-end">
+              <button type="button" id="btnAddExtProfileModel" class="btn-inline-primary">➕ Thêm vào danh sách</button>
+            </div>
           </div>
-          <p class="hint hint-sm">Bấm nút "Khác" sẽ gọi cấu hình đang chọn ở mục <b>Model Phụ</b>, tự động kế thừa ngữ cảnh Google Sheet.</p>
         </div>
       </section>
     </div>

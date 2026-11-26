@@ -44,7 +44,11 @@ const DEFAULTS = {
   rewriteTemperature: '',
   rewriteTopP: '',
   customRewriteGeminiModels: [],
-  hiddenRewriteBuiltinModels: []
+  hiddenRewriteBuiltinModels: [],
+  profileGeminiApiKey: '',
+  profileGeminiModel: 'gemini-3.5-flash-lite',
+  customProfileGeminiModels: [],
+  hiddenProfileBuiltinModels: []
 };
 
 // Danh sách model Gemini mặc định (built-in) — giữ nguyên thứ tự
@@ -408,6 +412,196 @@ function addExtRewriteModel() {
   renderRewriteModelDropdown(extId);
 }
 
+// ==============================================
+// === Profile Model Dropdown Logic (Hồ sơ) ===
+// ==============================================
+
+let customProfileGeminiModels = [];
+let hiddenProfileBuiltinModels = [];
+
+function getVisibleProfileModels() {
+  const visibleBuiltIn = BUILTIN_MODELS.filter(m => !hiddenProfileBuiltinModels.includes(m.value));
+  return [...visibleBuiltIn, ...customProfileGeminiModels];
+}
+
+function findProfileModelLabel(value) {
+  const allModels = [...BUILTIN_MODELS, ...customProfileGeminiModels];
+  const found = allModels.find(m => m.value === value);
+  return found ? found.label : value;
+}
+
+function renderProfileModelDropdown(selectedValue) {
+  const listEl = document.getElementById('profileModelDropdownList');
+  const labelEl = document.getElementById('profileModelDropdownLabel');
+  if (!listEl || !labelEl) return;
+
+  listEl.querySelectorAll('.model-dropdown-item').forEach(el => el.remove());
+  const addRow = listEl.querySelector('.model-add-row');
+  const allModels = getVisibleProfileModels();
+
+  allModels.forEach(m => {
+    const item = document.createElement('div');
+    item.className = 'model-dropdown-item' + (m.value === selectedValue ? ' selected' : '');
+    item.dataset.value = m.value;
+
+    const label = document.createElement('span');
+    label.className = 'model-item-label';
+    label.textContent = m.label;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'model-delete-btn';
+    deleteBtn.title = 'Xóa model này';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteProfileModel(m.value);
+    });
+
+    item.appendChild(label);
+    item.appendChild(deleteBtn);
+    item.addEventListener('click', () => selectProfileModel(m.value, m.label));
+
+    listEl.insertBefore(item, addRow);
+  });
+
+  labelEl.textContent = findProfileModelLabel(selectedValue);
+}
+
+function selectProfileModel(value, label) {
+  if (els.profileGeminiModel) els.profileGeminiModel.value = value;
+  const labelEl = document.getElementById('profileModelDropdownLabel');
+  if (labelEl) labelEl.textContent = label;
+  const listEl = document.getElementById('profileModelDropdownList');
+  if (listEl) listEl.style.display = 'none';
+  renderProfileModelDropdown(value);
+}
+
+function deleteProfileModel(value) {
+  const allModels = getVisibleProfileModels();
+  if (allModels.length <= 1) {
+    showStatus('❌ Cần giữ lại ít nhất 1 model!');
+    return;
+  }
+  const isBuiltIn = BUILTIN_MODELS.some(m => m.value === value);
+  if (isBuiltIn) {
+    if (!hiddenProfileBuiltinModels.includes(value)) hiddenProfileBuiltinModels.push(value);
+  } else {
+    customProfileGeminiModels = customProfileGeminiModels.filter(m => m.value !== value);
+  }
+
+  let currentSelected = els.profileGeminiModel ? els.profileGeminiModel.value : 'gemini-3.5-flash-lite';
+  if (currentSelected === value) {
+    const remaining = getVisibleProfileModels();
+    if (remaining.length > 0) {
+      currentSelected = remaining[0].value;
+      if (els.profileGeminiModel) els.profileGeminiModel.value = currentSelected;
+    }
+  }
+
+  chrome.storage.sync.set({
+    customProfileGeminiModels: customProfileGeminiModels,
+    hiddenProfileBuiltinModels: hiddenProfileBuiltinModels,
+    profileGeminiModel: currentSelected
+  }, () => showStatus('🗑️ Đã xóa model hồ sơ'));
+
+  renderProfileModelDropdown(currentSelected);
+}
+
+function addCustomProfileModel() {
+  const input = document.getElementById('addCustomProfileModelInput');
+  if (!input) return;
+  const modelName = input.value.trim();
+  if (!modelName) {
+    showStatus('❌ Vui lòng nhập tên model!');
+    return;
+  }
+  const isBuiltIn = BUILTIN_MODELS.some(m => m.value === modelName);
+  const isCustomExists = customProfileGeminiModels.some(m => m.value === modelName);
+
+  if (isBuiltIn) {
+    hiddenProfileBuiltinModels = hiddenProfileBuiltinModels.filter(v => v !== modelName);
+  } else if (!isCustomExists) {
+    customProfileGeminiModels.push({ value: modelName, label: '✏️ ' + modelName });
+  } else {
+    showStatus('⚠️ Model này đã tồn tại trong danh sách!');
+    selectProfileModel(modelName, findProfileModelLabel(modelName));
+    input.value = '';
+    return;
+  }
+
+  if (els.profileGeminiModel) els.profileGeminiModel.value = modelName;
+  input.value = '';
+
+  chrome.storage.sync.set({
+    customProfileGeminiModels: customProfileGeminiModels,
+    hiddenProfileBuiltinModels: hiddenProfileBuiltinModels,
+    profileGeminiModel: modelName
+  }, () => showStatus('✅ Đã thêm model hồ sơ: ' + modelName));
+
+  renderProfileModelDropdown(modelName);
+}
+
+function addExtProfileModel() {
+  const urlInput = document.getElementById('addExtProfileBaseUrl');
+  const keyInput = document.getElementById('addExtProfileApiKey');
+  const modelInput = document.getElementById('addExtProfileModel');
+  if (!urlInput || !keyInput || !modelInput) return;
+
+  const baseUrl = urlInput.value.trim();
+  const apiKey = keyInput.value.trim();
+  const modelName = modelInput.value.trim();
+
+  if (!baseUrl) {
+    showStatus('❌ Vui lòng nhập Base URL!');
+    urlInput.focus();
+    return;
+  }
+  if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+    showStatus('❌ Base URL phải bắt đầu bằng https://');
+    urlInput.focus();
+    return;
+  }
+  if (!apiKey) {
+    showStatus('❌ Vui lòng nhập API Key!');
+    keyInput.focus();
+    return;
+  }
+  if (!modelName) {
+    showStatus('❌ Vui lòng nhập mã model!');
+    modelInput.focus();
+    return;
+  }
+
+  const provName = getProviderNameFromUrl(baseUrl);
+  const extId = 'ext_prof_' + Date.now();
+  const extLabel = `🌐 ${modelName} (${provName})`;
+
+  const newModelItem = {
+    value: extId,
+    model: modelName,
+    label: extLabel,
+    type: 'openai_compatible',
+    baseUrl: baseUrl.replace(/\/+$/, ''),
+    apiKey: apiKey
+  };
+
+  customProfileGeminiModels.push(newModelItem);
+  if (els.profileGeminiModel) els.profileGeminiModel.value = extId;
+
+  urlInput.value = '';
+  keyInput.value = '';
+  modelInput.value = '';
+
+  chrome.storage.sync.set({
+    customProfileGeminiModels: customProfileGeminiModels,
+    hiddenProfileBuiltinModels: hiddenProfileBuiltinModels,
+    profileGeminiModel: extId
+  }, () => showStatus('✅ Đã thêm model ngoài (Hồ sơ): ' + modelName));
+
+  renderProfileModelDropdown(extId);
+}
+
 // ================================
 // === Profile Functions (giữ nguyên) ===
 // ================================
@@ -534,6 +728,26 @@ function loadSettings() {
     if (els.rewriteGeminiApiKey) els.rewriteGeminiApiKey.value = data.rewriteGeminiApiKey || '';
     if (els.rewriteTemperature) els.rewriteTemperature.value = (data.rewriteTemperature !== undefined && data.rewriteTemperature !== null && data.rewriteTemperature !== '') ? data.rewriteTemperature : '';
     if (els.rewriteTopP) els.rewriteTopP.value = (data.rewriteTopP !== undefined && data.rewriteTopP !== null && data.rewriteTopP !== '') ? data.rewriteTopP : '';
+
+    // === AI Tổng hợp Hồ sơ (Gemini & Model Ngoài): Nạp model & cấu hình ===
+    customProfileGeminiModels = (data.customProfileGeminiModels || []).map(m => {
+      if (typeof m === 'string') return { value: m, label: '✏️ ' + m };
+      return m;
+    });
+    hiddenProfileBuiltinModels = data.hiddenProfileBuiltinModels || [];
+    let currentProfileModel = data.profileGeminiModel || 'gemini-3.5-flash-lite';
+    const isProfBuiltIn = BUILTIN_MODELS.some(m => m.value === currentProfileModel);
+    const isProfCustom = customProfileGeminiModels.some(m => m.value === currentProfileModel);
+    if (!isProfBuiltIn && !isProfCustom && currentProfileModel) {
+      customProfileGeminiModels.push({ value: currentProfileModel, label: '✏️ ' + currentProfileModel });
+    }
+    if (isProfBuiltIn && hiddenProfileBuiltinModels.includes(currentProfileModel)) {
+      hiddenProfileBuiltinModels = hiddenProfileBuiltinModels.filter(v => v !== currentProfileModel);
+    }
+    if (els.profileGeminiModel) els.profileGeminiModel.value = currentProfileModel;
+    renderProfileModelDropdown(currentProfileModel);
+    if (els.profileGeminiApiKey) els.profileGeminiApiKey.value = data.profileGeminiApiKey || '';
+
     if (els.aiTemperature) els.aiTemperature.value = (data.aiTemperature !== undefined && data.aiTemperature !== null && data.aiTemperature !== '') ? data.aiTemperature : '';
     if (els.aiTopP) els.aiTopP.value = (data.aiTopP !== undefined && data.aiTopP !== null && data.aiTopP !== '') ? data.aiTopP : '';
 
@@ -629,6 +843,9 @@ function saveSettings() {
   if (rwTemp !== '' && (isNaN(rwTemp) || rwTemp < 0 || rwTemp > 2)) rwTemp = '';
   if (rwTopP !== '' && (isNaN(rwTopP) || rwTopP < 0 || rwTopP > 1)) rwTopP = '';
 
+  const selectedProfileModel = els.profileGeminiModel ? els.profileGeminiModel.value : 'gemini-3.5-flash-lite';
+  const profApiKey = (els.profileGeminiApiKey ? els.profileGeminiApiKey.value : '').trim();
+
   chrome.storage.sync.set({
     geminiUrl: gUrl, geminiWidth: gW, geminiHeight: gH,
     claudeUrl: cUrl, claudeWidth: cW, claudeHeight: cH,
@@ -645,6 +862,10 @@ function saveSettings() {
     rewriteTopP: rwTopP,
     customRewriteGeminiModels: customRewriteGeminiModels,
     hiddenRewriteBuiltinModels: hiddenRewriteBuiltinModels,
+    profileGeminiApiKey: profApiKey,
+    profileGeminiModel: selectedProfileModel,
+    customProfileGeminiModels: customProfileGeminiModels,
+    hiddenProfileBuiltinModels: hiddenProfileBuiltinModels,
     syncSheetUrl: (els.syncSheetUrl ? els.syncSheetUrl.value.trim() : ''),
     gasBankingUrl: (els.gasBankingUrl ? els.gasBankingUrl.value.trim() : ''),
     customAiBaseUrl: customAiBaseUrlVal,
@@ -751,6 +972,58 @@ if (addExtModelInput) {
     if (e.key === 'Enter') {
       e.preventDefault();
       addExtRewriteModel();
+    }
+  });
+}
+
+// ================================================
+// === Event Listeners: Profile Model Dropdown ===
+// ================================================
+
+const profileModelToggleEl = document.getElementById('profileModelDropdownToggle');
+if (profileModelToggleEl) {
+  profileModelToggleEl.addEventListener('click', () => {
+    const listEl = document.getElementById('profileModelDropdownList');
+    if (listEl) {
+      listEl.style.display = listEl.style.display === 'none' ? 'block' : 'none';
+    }
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const container = document.getElementById('profileModelDropdownContainer');
+  const listEl = document.getElementById('profileModelDropdownList');
+  if (container && listEl && !container.contains(e.target)) {
+    listEl.style.display = 'none';
+  }
+});
+
+const btnAddProfModel = document.getElementById('btnAddCustomProfileModel');
+if (btnAddProfModel) {
+  btnAddProfModel.addEventListener('click', addCustomProfileModel);
+}
+
+const addProfModelInput = document.getElementById('addCustomProfileModelInput');
+if (addProfModelInput) {
+  addProfModelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addCustomProfileModel();
+    }
+  });
+}
+
+const btnAddExtProf = document.getElementById('btnAddExtProfileModel');
+if (btnAddExtProf) {
+  btnAddExtProf.addEventListener('click', addExtProfileModel);
+}
+
+const addExtProfModelInput = document.getElementById('addExtProfileModel');
+if (addExtProfModelInput) {
+  addExtProfModelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addExtProfileModel();
     }
   });
 }
