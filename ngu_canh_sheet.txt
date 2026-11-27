@@ -872,46 +872,31 @@ function summarizeContextServer_(params) {
   let userPrompt = 'Khách hàng: ' + (params.customerName || 'Khách Hàng') + ' | Giới tính: ' + genderLabel + '\n';
   userPrompt += '\n[LỊCH SỬ HỘI THOẠI TRÊN SAPO (Đã lọc ' + params.filteredLines.length + ' tin nhắn cốt lõi)]:\n' + params.filteredLines.join('\n');
 
-  let lastErr = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      let text = '';
-      let finishReason = '';
-      if (profType === 'openai_compatible') {
-        const aiMetaRes = callOpenAICompatibleServer_(profBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null, true);
-        text = aiMetaRes.text;
-        finishReason = aiMetaRes.finishReason;
-      } else {
-        const payload = {
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: userPrompt }] }]
-        };
-        const json = callGeminiRawServer_(useModel, apiKey, payload);
-        const firstCand = json && json.candidates && json.candidates[0];
-        finishReason = (firstCand && firstCand.finishReason) ? String(firstCand.finishReason) : '';
-        text = (firstCand && firstCand.content && firstCand.content.parts && firstCand.content.parts[0] && firstCand.content.parts[0].text || '').trim();
-      }
-      if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
-      const wordCount = countWordsServer_(text);
-      const trunc = detectProfileTruncationServer_(text, finishReason);
-      return {
-        text: text,
-        wordCount: wordCount,
-        truncated: trunc.truncated,
-        truncReason: trunc.reason
-      };
-    } catch (e) {
-      lastErr = e;
-      const msg = String(e && e.message || '').toLowerCase();
-      const isTransient = !!(e.isQuota || msg.indexOf('429') !== -1 || msg.indexOf('500') !== -1 || msg.indexOf('502') !== -1 || msg.indexOf('503') !== -1 || msg.indexOf('504') !== -1 || msg.indexOf('timeout') !== -1 || msg.indexOf('overloaded') !== -1);
-      if (attempt < 2 && isTransient) {
-        Utilities.sleep(2000);
-        continue;
-      }
-      throw e;
-    }
+  let text = '';
+  let finishReason = '';
+  if (profType === 'openai_compatible') {
+    const aiMetaRes = callOpenAICompatibleServer_(profBaseUrl, useModel, apiKey, userPrompt, systemPrompt, null, null, true);
+    text = aiMetaRes.text;
+    finishReason = aiMetaRes.finishReason;
+  } else {
+    const payload = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userPrompt }] }]
+    };
+    const json = callGeminiRawServer_(useModel, apiKey, payload);
+    const firstCand = json && json.candidates && json.candidates[0];
+    finishReason = (firstCand && firstCand.finishReason) ? String(firstCand.finishReason) : '';
+    text = (firstCand && firstCand.content && firstCand.content.parts && firstCand.content.parts[0] && firstCand.content.parts[0].text || '').trim();
   }
-  throw lastErr || new Error('Lỗi tổng hợp hồ sơ');
+  if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
+  const wordCount = countWordsServer_(text);
+  const trunc = detectProfileTruncationServer_(text, finishReason);
+  return {
+    text: text,
+    wordCount: wordCount,
+    truncated: trunc.truncated,
+    truncReason: trunc.reason
+  };
 }
 
 function fetchInitialRecentMessagesOnce_(convId) {
@@ -993,6 +978,7 @@ function buildCustomerContextOnServer_(convId) {
 
   try {
     cust.ctxStatus = 'running';
+    cust.ctxStartedAt = Date.now();
     cust.ctxError = '';
     saveMobileCustomer_(cust);
 
@@ -1485,14 +1471,16 @@ function mobileGetDashboardState(serialByConvMap) {
   const cache = CacheService.getScriptCache();
   const customers = [];
 
-  // Đọc hàng loạt nháp (draft_*) và bản copy nhanh Hồ sơ (ctx_res_*) từ CacheService (6h)
+  // Đọc hàng loạt nháp (draft_*), bản copy nhanh Hồ sơ (ctx_res_*) và khóa chạy Hồ sơ (ctx_run_*) từ CacheService
   const draftHits = {};
   const ctxResHits = {};
+  const ctxRunHits = {};
   if (indexList.length > 0) {
     const batchKeys = [];
     indexList.forEach(function(idxItem) {
       batchKeys.push('draft_' + idxItem.convId);
       batchKeys.push('ctx_res_' + idxItem.convId);
+      batchKeys.push('ctx_run_' + idxItem.convId);
     });
     try {
       const allBatch = cache.getAll(batchKeys);
@@ -1504,6 +1492,9 @@ function mobileGetDashboardState(serialByConvMap) {
         if (allBatch['ctx_res_' + cid]) {
           try { ctxResHits[cid] = JSON.parse(allBatch['ctx_res_' + cid]); } catch (eC) {}
         }
+        if (allBatch['ctx_run_' + cid]) {
+          ctxRunHits[cid] = true;
+        }
       });
     } catch (eBatch) {}
   }
@@ -1511,6 +1502,20 @@ function mobileGetDashboardState(serialByConvMap) {
   indexList.forEach(function(idxItem) {
     const cust = getMobileCustomer_(idxItem.convId);
     if (!cust) return;
+
+    if (cust.ctxStatus === 'running') {
+      const isCtxStale = !ctxRunHits[cust.convId] || (cust.ctxStartedAt && (Date.now() - cust.ctxStartedAt > 180000));
+      if (isCtxStale) {
+        cust.ctxStatus = 'error';
+        cust.ctxType = 'error_no_old';
+        cust.ctxError = 'Quá thời gian tổng hợp hồ sơ (3 phút)';
+        cust.ctxWords = 0;
+        cust.ctxTruncated = false;
+        cust.ctxTruncReason = '';
+        cust.unlocked = true;
+        saveMobileCustomer_(cust);
+      }
+    }
 
     if (draftHits[cust.convId]) {
       cust.draft = draftHits[cust.convId];

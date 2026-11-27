@@ -215,8 +215,14 @@ async function cleanupExpiredLocalStorage(force = false) {
     const keysToStamp = {};
 
     for (const [k, v] of Object.entries(allData)) {
-      if (k.startsWith('sa_running_') || k.startsWith('sa_ctx_running_')) {
-        if (!v || !v.startTime || (now - v.startTime > 240000)) {
+      if (k.startsWith('sa_running_')) {
+        if (!v || !v.startTime || (now - v.startTime > 370000)) {
+          keysToRemove.push(k);
+        }
+        continue;
+      }
+      if (k.startsWith('sa_ctx_running_')) {
+        if (!v || !v.startTime || (now - v.startTime > 180000)) {
           keysToRemove.push(k);
         }
         continue;
@@ -761,7 +767,7 @@ const bgAiService = {
           settings.customAiModel,
           settings.customAiApiKey,
           userPrompt,
-          120000,
+          180000,
           systemPrompt,
           settings.aiTemperature,
           settings.aiTopP
@@ -784,7 +790,7 @@ const bgAiService = {
         if (Object.keys(genConfig).length > 0) {
           payload.generationConfig = genConfig;
         }
-        const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 120000, (msg) => sendStatus(msg));
+        const { json, modelName } = await this.executeWithFallback(settings.apiKey, usedModelName, payload, 180000, (msg) => sendStatus(msg));
         usedModelName = modelName;
         aiResult = (json.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
       }
@@ -824,7 +830,7 @@ const bgAiService = {
                 settings.rewriteModel,
                 settings.rewriteApiKey,
                 aiResult,
-                120000,
+                180000,
                 vietLaiPrompt,
                 settings.rewriteTemperature,
                 settings.rewriteTopP
@@ -845,7 +851,7 @@ const bgAiService = {
               }
 
               console.log(`[SA-BG] Calling Gemini Rewrite Model: ${settings.rewriteModel}`);
-              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 120000);
+              const rwRes = await this.callModel(settings.rewriteModel, settings.rewriteApiKey, rwPayload, 180000);
               const textRw = (rwRes?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
               if (textRw && textRw.length > 20) {
                 rewrittenResult = textRw;
@@ -1148,43 +1154,27 @@ const bgContextService = {
       contents: [{ parts: [{ text: userPrompt }] }]
     };
 
-    let lastErr = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        let text = '';
-        let finishReason = '';
-        if (providerType === 'openai_compatible') {
-          const aiMeta = await bgAiService.callOpenAICompatible(baseUrl, useModel, apiKey, userPrompt, 120000, systemPrompt, null, null, true);
-          text = aiMeta.text;
-          finishReason = aiMeta.finishReason || '';
-        } else {
-          const json = await bgAiService.callModel(useModel, apiKey, payload, 120000);
-          text = (json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-          finishReason = json?.candidates?.[0]?.finishReason || '';
-        }
-        if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
-        const wordCount = this.countWords(text);
-        const truncInfo = this.detectProfileTruncation(text, finishReason);
-        return {
-          text,
-          wordCount,
-          truncated: truncInfo.truncated,
-          truncReason: truncInfo.reason,
-          finishReason
-        };
-      } catch (e) {
-        lastErr = e;
-        const msg = String(e?.message || '').toLowerCase();
-        const isTransient = !!(e?.quota || e?.name === 'AbortError' || msg.includes('429') || msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504') || msg.includes('fetch') || msg.includes('network') || msg.includes('overloaded'));
-        if (attempt < 2 && isTransient) {
-          console.warn(`[SA-BG] Tổng hợp hồ sơ gặp lỗi tạm (${e.message}), thử lại sau 2.5s...`);
-          await new Promise(r => setTimeout(r, 2500));
-          continue;
-        }
-        throw e;
-      }
+    let text = '';
+    let finishReason = '';
+    if (providerType === 'openai_compatible') {
+      const aiMeta = await bgAiService.callOpenAICompatible(baseUrl, useModel, apiKey, userPrompt, 120000, systemPrompt, null, null, true);
+      text = aiMeta.text;
+      finishReason = aiMeta.finishReason || '';
+    } else {
+      const json = await bgAiService.callModel(useModel, apiKey, payload, 120000);
+      text = (json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+      finishReason = json?.candidates?.[0]?.finishReason || '';
     }
-    throw lastErr || new Error('Lỗi tổng hợp hồ sơ');
+    if (!text || text.length < 20) throw new Error('AI trả về hồ sơ rỗng');
+    const wordCount = this.countWords(text);
+    const truncInfo = this.detectProfileTruncation(text, finishReason);
+    return {
+      text,
+      wordCount,
+      truncated: truncInfo.truncated,
+      truncReason: truncInfo.reason,
+      finishReason
+    };
   },
 
   async runContextBuild({ serial, convId, customerName, sapoToken, tenant }) {
